@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -422,6 +425,12 @@ def _run_generate(args: argparse.Namespace) -> int:
         f"swing={controls.swing}, humanize={controls.humanize}, variation={controls.variation}"
     )
 
+    try:
+        source_bytes = Path(args.audio).read_bytes()
+        source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    except Exception:
+        source_sha256 = None
+
     preview_arrays: list[tuple[str, np.ndarray]] = []
 
     for style in styles:
@@ -430,6 +439,18 @@ def _run_generate(args: argparse.Namespace) -> int:
             pattern = generate_pattern(
                 analysis, style, seed=variant_seed, controls=controls, arrangement=arrangement
             )
+            pattern.metadata["source_sha256"] = source_sha256
+            pattern.metadata["input_manifest"] = {
+                "seed": variant_seed,
+                "style": style,
+                "genre": genre,
+                "controls": asdict(controls),
+                "generator_version": pattern.metadata.get("generator_version", "0.1.0"),
+            }
+            pattern_dict = pattern.to_dict()
+            pattern_json = json.dumps(pattern_dict, default=str, indent=2)
+            pattern_sha256 = hashlib.sha256(pattern_json.encode()).hexdigest()
+            pattern.metadata["pattern_sha256"] = pattern_sha256
             if args.variants > 1:
                 style_dir = ensure_output_dir(output_dir / style / f"variant_{variant}")
             else:

@@ -20,6 +20,39 @@ STYLE_GENRE_MAP: dict[str, str] = {
 
 ALL_STYLES = DNB_STYLES + HIPHOP_STYLES
 
+
+@dataclass(frozen=True, slots=True)
+class GenreGrammar:
+    """Declarative beat grammar defining genre-specific rhythmic rules."""
+    hat_stride: int
+    open_hat_fractions: tuple[float, ...]
+    ghost_fractions: tuple[float, ...]
+    fill_stride: int
+    swing_base: float
+
+
+DNB_GRAMMAR = GenreGrammar(
+    hat_stride=1,
+    open_hat_fractions=(0.4375, 0.9375),
+    ghost_fractions=(0.125, 0.625, 0.875),
+    fill_stride=4,
+    swing_base=0.0,
+)
+
+HIPHOP_GRAMMAR = GenreGrammar(
+    hat_stride=2,
+    open_hat_fractions=(0.4375, 0.9375),
+    ghost_fractions=(0.125, 0.625),
+    fill_stride=4,
+    swing_base=0.12,
+)
+
+GENRE_GRAMMARS: dict[str, GenreGrammar] = {
+    "dnb": DNB_GRAMMAR,
+    "hiphop": HIPHOP_GRAMMAR,
+}
+
+
 DEFAULT_STYLE_PER_GENRE: dict[str, str] = {
     "dnb": "minimal",
     "hiphop": "boom_bap",

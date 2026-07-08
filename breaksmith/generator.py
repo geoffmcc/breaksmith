@@ -17,6 +17,7 @@ from .generator_shared import (
     _humanized_velocity,
 )
 from .models import (
+    GENRE_GRAMMARS,
     INSTRUMENTS,
     HIPHOP_STYLES,
     AudioAnalysis,
@@ -223,6 +224,7 @@ def generate_pattern(
     if genre is not None:
         validate_style_genre(style, genre)
     genre = resolve_genre(style, genre)
+    grammar = GENRE_GRAMMARS.get(genre)
 
     preset = STYLE_PRESETS[style]
     rng = random.Random(f"{seed}:{style}:{asdict(controls)}")
@@ -335,7 +337,7 @@ def generate_pattern(
                     )
                     selected += 1
 
-        for step in range(steps):
+        for step in range(0, steps, grammar.hat_stride):
             index = offset + step
             accent = step % 4 == 0
             probability = (
@@ -362,7 +364,8 @@ def generate_pattern(
                     rng,
                 )
 
-        for step in (steps // 2 - 1, steps - 1):
+        for fraction in grammar.open_hat_fractions:
+            step = _step_from_fraction(steps, fraction)
             chance = eff_open_hat_prob * density_scale * ldm["open_hat"] + energy * 0.20
             if rng.random() < min(0.85, chance):
                 _add_hit(
@@ -376,10 +379,11 @@ def generate_pattern(
                     rng,
                 )
 
-        ghost_steps = {steps // 4 - 2, steps // 2 + 2, 3 * steps // 4 - 2, steps - 2}
+
+        ghost_set = {_step_from_fraction(steps, f) for f in grammar.ghost_fractions}
         if eff_breakbeat_bias:
-            ghost_steps.update({steps // 4 + 2, steps // 2 - 1, steps - 3})
-        for step in sorted(step % steps for step in ghost_steps):
+            ghost_set.update({steps // 4 + 2, steps // 2 - 1, steps - 3})
+        for step in sorted(step % steps for step in ghost_set):
             index = offset + step
             emptiness = 1.0 - _activity(analysis.onset_activity, index)
             chance = eff_ghost_prob * density_scale * ldm["snare"] * (0.45 + emptiness)
@@ -415,7 +419,7 @@ def generate_pattern(
                     rng,
                 )
 
-        is_phrase_end = (bar + 1) % 4 == 0 or bar == bars - 1
+        is_phrase_end = (bar + 1) % grammar.fill_stride == 0 or bar == bars - 1
         if arrangement and section is not None:
             next_bar_section = bar_sections.get(bar + 1)
             if next_bar_section is not None and next_bar_section is not section:

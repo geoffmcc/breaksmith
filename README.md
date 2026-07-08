@@ -10,6 +10,7 @@ The generator is rule-based: it reads source activity (onsets, low-end, high-end
 - **Editable output**: MIDI files import directly into Ableton, Logic, or any DAW. Strudel code works in the browser. JSON preserves the logical grid with per-hit microtiming.
 - **Source-aware**: patterns respond to the source's timing, density, and spectral character — they are not random or template-based.
 - **Genre support**: drum-and-bass (7 styles) and hip-hop (7 styles) with distinct rhythmic grammars.
+- **Time signature support**: full 4/4, 3/4, and 6/8 meter support with configurable beat groupings.
 - **Iterate quickly**: generate variants, adjust density per layer, compare styles, and shorten previews for rapid audition.
 
 ## Current Capabilities
@@ -21,6 +22,8 @@ The generator is rule-based: it reads source activity (onsets, low-end, high-end
 - Exact bar count generation (`--bars`) or automatic source-length matching
 - Arrangement presets (`--structure short`, `build-drop`, `minimal`)
 - Click-track rendering for grid verification (`--render-click`)
+- Time signature / meter support: 4/4, 3/4, 6/8 (`--time-signature`)
+- Beat grouping override for compound meters (`--beat-grouping`)
 - Drum-and-bass generation: 7 styles with per-style numeric presets
 - Hip-hop generation: 7 styles with per-style numeric presets
 - Genre-dependent default controls (density, swing, humanize, variation, source restraint)
@@ -115,11 +118,13 @@ Options:
 |---|---|---|
 | `--output` | Output path for analysis JSON | `analysis.json` |
 | `--bpm` | Override BPM estimation | auto-detected |
-| `--steps-per-bar` | Grid resolution (multiple of 4) | `16` |
+| `--steps-per-bar` | Grid resolution (derived from meter if omitted) | auto (meter-dependent) |
 | `--grid-start` | Manual grid start in seconds | detected |
-| `--downbeat-start` | Manual downbeat in seconds | detected |
+| `--downbeat-start` | Manual downbeat in seconds; overrides `--grid-start` when both are provided | detected |
 | `--render-click` | Render diagnostic click + source-with-click WAVs | off |
 | `--features-csv` | Write step-level feature maps as CSV | off |
+| `--time-signature` | Time signature / meter (`3/4`, `4/4`, `6/8`) | `4/4` |
+| `--beat-grouping` | Beat grouping override (e.g. `2+4` for 6/8) | follows meter |
 
 Examples:
 
@@ -127,6 +132,7 @@ Examples:
 uv run breaksmith analyze input.wav
 uv run breaksmith analyze input.wav --bpm 172
 uv run breaksmith analyze input.wav --bpm 172 --grid-start 0.125 --render-click
+uv run breaksmith analyze input.wav --bpm 140 --time-signature 3/4
 uv run breaksmith analyze input.wav --bpm 172 --features-csv features.csv
 ```
 
@@ -143,6 +149,7 @@ The output includes:
   - `extra_beat`: source has roughly one extra beat (common with exported loops)
   - `partial_bar`: source does not align with a whole number of bars
 - **Source features**: onset, low, high, and energy activity maps.
+- **Meter**: detected or user-specified time signature with beat groups.
 
 ### `breaksmith generate`
 
@@ -158,6 +165,7 @@ Options are grouped below. See [`docs/CLI.md`](docs/CLI.md) for the full referen
 
 | Option | Values | Default |
 |---|---|---|
+| `--output` | directory path | `output` |
 | `--genre` | `dnb`, `hiphop` | inferred from style |
 | `--style` | 14 style names + `all` | `all` (all styles for genre) |
 | `--structure` | `short`, `build-drop`, `minimal` | none (flat bars) |
@@ -167,12 +175,21 @@ Options are grouped below. See [`docs/CLI.md`](docs/CLI.md) for the full referen
 | Option | Range | Default |
 |---|---|---|
 | `--bars` | positive int | source bar count |
+| `--bpm` | positive float | auto-detected |
+| `--steps-per-bar` | positive int | derived from meter |
 | `--density` | 0.0–1.0 | genre-dependent |
 | `--variation` | 0.0–1.0 | genre-dependent |
 | `--swing` | 0.0–0.5 | genre-dependent |
 | `--humanize` | 0.0–1.0 | genre-dependent |
 | `--seed` | int | `42` |
 | `--variants` | positive int | `1` |
+
+**Meter**:
+
+| Option | Values | Default |
+|---|---|---|
+| `--time-signature` | `3/4`, `4/4`, `6/8` | `4/4` |
+| `--beat-grouping` | grouping string (e.g. `2+4` for 6/8) | follows meter |
 
 **Genre defaults**:
 
@@ -280,6 +297,28 @@ uv run breaksmith generate input.wav \
   --preview
 ```
 
+**Example: 3/4 waltz-style groove**
+
+```bash
+uv run breaksmith generate input.wav \
+  --genre dnb \
+  --style minimal \
+  --time-signature 3/4 \
+  --bars 8 \
+  --preview
+```
+
+**Example: 6/8 compound groove**
+
+```bash
+uv run breaksmith generate input.wav \
+  --genre hiphop \
+  --style laid_back \
+  --time-signature 6/8 \
+  --bars 8 \
+  --preview
+```
+
 ## Genres and Styles
 
 ### Drum & Bass (7 styles)
@@ -307,6 +346,39 @@ uv run breaksmith generate input.wav \
 | `sparse` | Very few events with strong anchor points and large empty spaces. |
 
 Genre determines the rhythmic grammar: DnB has 16th-note hat stride; hip-hop has 8th-note hat stride with inherent swing. Style determines the groove vocabulary (kick density, syncopation, fill frequency, velocity ranges). There is no "sparse/balanced/active" variant system — density is controlled continuously via `--density`.
+
+## Time Signature / Meter
+
+Breaksmith supports 4/4, 3/4, and 6/8 time signatures with configurable beat groupings. Meter affects every stage of generation:
+
+- **Step grid**: `steps_per_bar` is derived from the meter (16 for 4/4, 12 for 3/4, 12 for 6/8).
+- **Beat positions**: downbeats and accent steps follow the meter's primary beats.
+- **MIDI export**: time signature meta event is embedded in the MIDI file.
+- **Strudel export**: `setcpm()` uses the meter's primary beats per bar for correct tempo.
+- **Preview synth**: step duration is computed relative to the meter.
+- **Click track**: downbeat accents align with the meter's beat grouping.
+
+### Meter presets
+
+| Flag | Primary beats | Step grid | Best for |
+|---|---|---|---|
+| `--time-signature 4/4` | 4 | 16 steps | Standard DnB, hip-hop |
+| `--time-signature 3/4` | 3 | 12 steps | Waltz, triple-meter grooves |
+| `--time-signature 6/8` | 2 (compound) | 12 steps | Compound duple, shuffle feels |
+
+### Beat grouping
+
+Beat grouping controls which steps within each bar receive accent emphasis. The default grouping follows the meter:
+- 4/4: `1+1+1+1` (four quarter-note beats)
+- 3/4: `1+1+1` (three quarter-note beats)
+- 6/8: `3+3` (two dotted-quarter groups)
+
+Override with `--beat-grouping` when you need non-standard accent patterns. The grouping must match the meter's pulse count and group count (4 groups summing to 4 pulses for 4/4, 2 groups summing to 6 pulses for 6/8):
+
+```bash
+# 6/8 with 2+4 duple grouping (instead of default 3+3)
+uv run breaksmith generate input.wav --time-signature 6/8 --beat-grouping 2+4
+```
 
 ## Controls in Detail
 
@@ -348,19 +420,21 @@ The generator does not fill every space with drums. Hits are placed based on sou
 
 ## Output Files
 
+When `generate` writes to a directory, the output tree looks like:
+
 ```
 output/
-├── analysis.json              # Full audio analysis dump
+├── analysis.json                  # Full audio analysis
 ├── minimal/
-│   ├── pattern.json           # Drum pattern (hits, velocities, microtiming)
-│   ├── pattern.mid            # Multi-track MIDI (Type 1, GM drum map)
-│   ├── pattern.strudel.js     # Editable Strudel pattern
-│   └── pattern-preview.wav    # Rendered audio preview (with --preview)
+│   ├── pattern.json               # Drum pattern (hits, velocities, microtiming)
+│   ├── pattern.mid                # Multi-track MIDI (Type 1, GM drum map)
+│   ├── pattern.strudel.js         # Editable Strudel pattern
+│   └── pattern-preview.wav        # Rendered audio preview (with --preview)
 ├── rolling/
 │   └── ...
-├── comparison.wav             # All-style comparison (with --preview-comparison)
+├── comparison.wav                 # All-style comparison (with --preview-comparison)
 └── liquid/
-    └── variant_0/              # (with --variants 3)
+    └── variant_0/                  # (with --variants 3)
         ├── pattern.json
         └── ...
 ```
@@ -388,6 +462,7 @@ If the rendered preview sounds good, use it as a reference. If the groove needs 
 3. The pattern uses default Strudel sounds: `bd` (kick), `sd` (snare), `hh` (closed hat), `oh` (open hat), `rim` (percussion).
 4. Edit the mini-notation strings to change the pattern — the grid is fully readable.
 5. Timing offsets (swing, humanization, groove) are documented in comments but not rendered in Strudel's grid notation, since Strudel has its own timing model.
+6. Time signature is applied via `setcpm()` using the meter's primary beats per bar.
 
 ## Troubleshooting
 
@@ -411,7 +486,6 @@ See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for deeper diagnostics.
 
 ## Known Limitations
 
-- Assumes 4/4 time. Other time signatures are not supported.
 - Works best with steady-tempo loops. Rubato or heavily swung material will have low timing confidence.
 - No destructive source trimming — bar count is selected at generation time but the source is not modified.
 - No stem separation — source activity features are descriptive, not separated into individual instruments.
@@ -438,23 +512,25 @@ See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for deeper diagnostics.
 
 ```bash
 uv sync
-uv run pytest      # 83 tests
-uv run ruff check .  # lint
+uv run pytest         # 108 tests
+uv run ruff check .   # lint
 ```
 
 ### Project layout
 
 ```
 breaksmith/
+├── __init__.py
 ├── analysis.py              # Audio analysis (librosa)
 ├── cli.py                   # CLI argument parsing and dispatch
 ├── click.py                 # Click track rendering
 ├── generator.py             # DnB pattern generation
 ├── generator_shared.py      # Shared controls and utilities
 ├── hiphop.py                # Hip-hop pattern generation
-├── models.py                # Data models, grammars, presets
+├── models.py                # Data models (Meter, GenreGrammar, StylePreset, etc.)
 ├── synth.py                 # Audio preview synthesis
 └── exporters/
+    ├── __init__.py
     ├── json_export.py       # JSON and CSV export
     ├── midi.py              # MIDI file export
     └── strudel.py           # Strudel pattern export

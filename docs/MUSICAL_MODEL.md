@@ -8,6 +8,35 @@ Breaksmith is a rule-based drum pattern generator. It does not use machine learn
 4. **Stochastic scoring** — each step gets a hit probability per instrument, modulated by controls
 5. **Deterministic RNG** — same inputs always produce the same output
 
+## Meter
+
+The `Meter` dataclass defines the time signature for a pattern. It controls the step grid resolution, beat groupings, and accent positions.
+
+### Meter presets
+
+| Name | Numerator | Denominator | Beat groups | Primary beats | Steps per bar |
+|---|---|---|---|---|---|
+| `METER_44` | 4 | 4 | `[1,1,1,1]` | 4 | 16 |
+| `METER_34` | 3 | 4 | `[1,1,1]` | 3 | 12 |
+| `METER_68` | 6 | 8 | `[3,3]` | 2 | 24 |
+
+The meter's `steps_per_bar` is derived from the formula `numerator × (4 / denominator) × 4` (standard 16th-note resolution). For 6/8, the compound grouping `[3, 3]` means each of the 2 primary beats contains 3 eighth-notes (12 16th-note steps per primary beat).
+
+### `parse_time_signature()`
+
+Parses `--time-signature` values (`"4/4"`, `"3/4"`, `"6/8"`) into a `Meter` instance. Falls back to `METER_44` for unknown values.
+
+### `validate_beat_grouping()`
+
+Validates and applies `--beat-grouping` overrides. The grouping string (e.g., `"2+4"` for 6/8) must have the same number of parts as the meter's beat groups and must sum to the meter's pulses_per_bar. Returns a new Meter with the overridden beat groups.
+
+Meter affects:
+- **Grid resolution**: `steps_per_bar` varies by meter (16 / 12 / 12)
+- **Downbeat positions**: click track and accent steps align with `primary_beats_per_bar`
+- **MIDI export**: time signature meta event is embedded
+- **Strudel export**: `setcpm()` uses `primary_beats_per_bar`
+- **Preview synth**: step duration is computed from meter
+
 ## Genre Grammar
 
 Each genre defines the fundamental rhythmic grid and step resolution.
@@ -210,6 +239,22 @@ class GenreGrammar:
 
 DnB: `stride=16, hat_stride=16`
 Hip-hop: `stride=8, hat_stride=8`
+
+### `Meter`
+
+```python
+@dataclass(frozen=True)
+class Meter:
+    numerator: int
+    denominator: int
+    beat_groups: list[int]
+    tempo_unit: str = "quarter"
+    primary_beats_per_bar: int = 4
+    pulses_per_bar: int = 4
+    steps_per_bar: int = 16
+```
+
+Three presets: `METER_44`, `METER_34`, `METER_68`. Created via `parse_time_signature()` or directly.
 
 ### `GenerationControls`
 

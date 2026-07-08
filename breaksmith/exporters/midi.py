@@ -56,14 +56,21 @@ def write_midi(
     velocity_curve: str = "linear",
 ) -> None:
     ticks_per_beat = 480
-    ticks_per_step = ticks_per_beat * 4 // pattern.steps_per_bar
+    ticks_per_step = ticks_per_beat * pattern.meter.denominator // pattern.steps_per_bar
 
     midi = MidiFile(type=1, ticks_per_beat=ticks_per_beat)
     conductor = MidiTrack()
     midi.tracks.append(conductor)
     conductor.append(MetaMessage("track_name", name=f"{pattern.name} conductor", time=0))
     conductor.append(MetaMessage("set_tempo", tempo=bpm2tempo(pattern.bpm), time=0))
-    conductor.append(MetaMessage("time_signature", numerator=4, denominator=4, time=0))
+    conductor.append(
+        MetaMessage(
+            "time_signature",
+            numerator=pattern.meter.numerator,
+            denominator=pattern.meter.denominator,
+            time=0,
+        )
+    )
     feel = GROOVE_FEEL_MARKERS.get(pattern.name, "straight")
     conductor.append(MetaMessage("marker", text=f"groove: {feel}", time=0))
     swing_meta = pattern.metadata.get("controls", {}).get("swing", 0.0)

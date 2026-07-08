@@ -23,8 +23,13 @@ from breaksmith.generator import STYLE_PRESETS, GenerationControls, generate_pat
 from breaksmith.models import (
     ARRANGEMENT_PRESETS,
     SHORT_ARRANGEMENT,
+    METER_34,
+    METER_44,
+    METER_68,
     AudioAnalysis,
     arrangement_bar_count,
+    parse_time_signature,
+    validate_beat_grouping,
 )
 from breaksmith.synth import (
     INSTRUMENT_DURATIONS,
@@ -492,6 +497,8 @@ def test_midi_with_velocity_curve_from_cli(monkeypatch, tmp_path: Path) -> None:
         open_hat_density=None,
         percussion_density=None,
         midi_velocity_curve="exponential",
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
     midi_path = tmp_path / "output" / "rolling" / "pattern.mid"
@@ -558,6 +565,8 @@ def test_analyze_output_includes_grid_fit_diagnostics(monkeypatch, capsys, tmp_p
         downbeat_start=None,
         render_click=False,
         features_csv=None,
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_analyze(args) == 0
     output = capsys.readouterr().out
@@ -588,6 +597,8 @@ def test_analyze_passes_manual_grid_start_to_analysis(monkeypatch, tmp_path: Pat
         downbeat_start=None,
         render_click=False,
         features_csv=None,
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_analyze(args) == 0
     assert captured == {"grid_start_override": 0.125, "downbeat_override": None}
@@ -612,6 +623,8 @@ def test_analyze_output_includes_timing_confidence(monkeypatch, capsys, tmp_path
         downbeat_start=None,
         render_click=False,
         features_csv=None,
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_analyze(args) == 0
     output = capsys.readouterr().out
@@ -639,6 +652,8 @@ def test_analyze_render_click_writes_diagnostic_files(monkeypatch, tmp_path: Pat
         downbeat_start=None,
         render_click=True,
         features_csv=None,
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_analyze(args) == 0
     assert (tmp_path / "analysis-click.wav").exists()
@@ -667,6 +682,8 @@ def test_analyze_writes_feature_csv(monkeypatch, tmp_path: Path) -> None:
         downbeat_start=None,
         render_click=False,
         features_csv=features_csv,
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_analyze(args) == 0
     text = features_csv.read_text(encoding="utf-8")
@@ -710,6 +727,8 @@ def test_generate_output_suggests_bars_for_extra_beat_source(
         open_hat_density=None,
         percussion_density=None,
         midi_velocity_curve="linear",
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -750,6 +769,8 @@ def test_generate_output_reports_exact_requested_bars(monkeypatch, capsys, tmp_p
         open_hat_density=None,
         percussion_density=None,
         midi_velocity_curve="linear",
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -807,7 +828,7 @@ def test_render_preview_returns_correct_length() -> None:
     pattern = generate_pattern(fake_analysis(), "rolling", seed=42)
     sr = 22050
     audio = render_preview(pattern, sample_rate=sr, seed=42)
-    step_dur = (60.0 / pattern.bpm) * 4.0 / pattern.steps_per_bar
+    step_dur = (60.0 / pattern.bpm) * pattern.meter.primary_beats_per_bar / pattern.steps_per_bar
     expected_seconds = pattern.bars * pattern.steps_per_bar * step_dur
     padding = max(INSTRUMENT_DURATIONS.values()) * 1.2
     expected_samples = max(1, round((expected_seconds + padding) * sr))
@@ -869,6 +890,8 @@ def test_generate_with_preview_writes_wav(monkeypatch, tmp_path: Path) -> None:
         open_hat_density=None,
         percussion_density=None,
         midi_velocity_curve="linear",
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
     preview = tmp_path / "output" / "rolling" / "pattern-preview.wav"
@@ -913,6 +936,8 @@ def test_generate_preview_matches_render_preview(monkeypatch, tmp_path: Path) ->
         open_hat_density=None,
         percussion_density=None,
         midi_velocity_curve="linear",
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
     preview_path = tmp_path / "output" / "rolling" / "pattern-preview.wav"
@@ -998,6 +1023,8 @@ def test_generate_with_structure_cli_flag(monkeypatch, capsys, tmp_path: Path) -
         open_hat_density=None,
         percussion_density=None,
         midi_velocity_curve="linear",
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -1041,12 +1068,255 @@ def test_generate_with_structure_overrides_bars(monkeypatch, capsys, tmp_path: P
         open_hat_density=None,
         percussion_density=None,
         midi_velocity_curve="linear",
+        time_signature="4/4",
+        beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
     captured = capsys.readouterr()
     assert "Warning: --structure overrides --bars" in captured.err
     assert "drop(16b) → outro(4b)" in captured.out
     assert "20 total bars" in captured.out
+
+
+def test_meter_44_properties() -> None:
+    assert METER_44.display == "4/4"
+    assert METER_44.primary_beats_per_bar == 4
+    assert METER_44.steps_per_bar == 16
+    assert METER_44.beat_groups == (1, 1, 1, 1)
+    assert METER_44.pulses_per_bar == 4
+    assert METER_44.tempo_unit == "quarter"
+    assert not METER_44.is_compound
+    assert METER_44.is_simple
+    assert METER_44.downbeat_steps() == [0, 4, 8, 12]
+    assert METER_44.accent_strength(0) == 1.0
+    assert METER_44.accent_strength(4) == 0.7
+    assert METER_44.beat_duration(120) == pytest.approx(0.5)
+    assert METER_44.bar_duration(120) == pytest.approx(2.0)
+    assert METER_44.step_duration(120) == pytest.approx(0.125)
+
+
+def test_meter_34_properties() -> None:
+    assert METER_34.display == "3/4"
+    assert METER_34.primary_beats_per_bar == 3
+    assert METER_34.steps_per_bar == 12
+    assert METER_34.beat_groups == (1, 1, 1)
+    assert not METER_34.is_compound
+    assert METER_34.is_simple
+    assert METER_34.downbeat_steps() == [0, 4, 8]
+    assert METER_34.accent_strength(0) == 1.0
+    assert METER_34.accent_strength(4) == 0.7
+    assert METER_34.beat_duration(120) == pytest.approx(0.5)
+    assert METER_34.bar_duration(120) == pytest.approx(1.5)
+    assert METER_34.step_duration(120) == pytest.approx(0.125)
+
+
+def test_meter_68_properties() -> None:
+    assert METER_68.display == "6/8"
+    assert METER_68.primary_beats_per_bar == 2
+    assert METER_68.steps_per_bar == 12
+    assert METER_68.beat_groups == (3, 3)
+    assert METER_68.pulses_per_bar == 6
+    assert METER_68.tempo_unit == "dotted_quarter"
+    assert METER_68.is_compound
+    assert not METER_68.is_simple
+    assert METER_68.downbeat_steps() == [0, 6]
+    assert METER_68.accent_strength(0) == 1.0
+    assert METER_68.accent_strength(6) == 1.0
+    assert METER_68.beat_duration(120) == pytest.approx(0.5)
+    assert METER_68.bar_duration(120) == pytest.approx(1.0)
+    assert METER_68.step_duration(120) == pytest.approx(1.0 / 12)
+
+
+def test_parse_time_signature_returns_matching_preset() -> None:
+    assert parse_time_signature("4/4") is METER_44
+    assert parse_time_signature("3/4") is METER_34
+    assert parse_time_signature("6/8") is METER_68
+    with pytest.raises(ValueError, match="Unsupported"):
+        parse_time_signature("5/4")
+    with pytest.raises(ValueError, match="Invalid"):
+        parse_time_signature("invalid")
+
+
+def test_validate_beat_grouping_passes_default() -> None:
+    assert validate_beat_grouping(METER_44, None).beat_groups == METER_44.beat_groups
+
+
+def test_validate_beat_grouping_accepts_valid_custom() -> None:
+    assert validate_beat_grouping(METER_34, "1+1+1").beat_groups == (1, 1, 1)
+    assert validate_beat_grouping(METER_68, "4+2").beat_groups == (4, 2)
+    assert validate_beat_grouping(METER_68, "3+3").beat_groups == (3, 3)
+
+
+def test_validate_beat_grouping_rejects_wrong_group_count() -> None:
+    with pytest.raises(ValueError, match="has 3 groups"):
+        validate_beat_grouping(METER_68, "2+2+2")
+
+
+def test_validate_beat_grouping_rejects_wrong_sum() -> None:
+    with pytest.raises(ValueError, match="sums to"):
+        validate_beat_grouping(METER_44, "1+1+1+2")
+
+
+def test_loop_fit_34_clean() -> None:
+    bar_dur = 3 * 60.0 / 120.0
+    fit = calculate_loop_fit(duration_seconds=bar_dur * 4, bpm=120, steps_per_bar=12, meter=METER_34)
+    assert fit["duration_fit"] == "clean"
+    assert fit["complete_bar_count"] == 4
+
+
+def test_loop_fit_68_clean() -> None:
+    bar_dur = 2 * 60.0 / 120.0
+    fit = calculate_loop_fit(duration_seconds=bar_dur * 4, bpm=120, steps_per_bar=12, meter=METER_68)
+    assert fit["duration_fit"] == "clean"
+    assert fit["complete_bar_count"] == 4
+
+
+def test_loop_fit_34_inherits_beat_duration_from_meter() -> None:
+    fit = calculate_loop_fit(duration_seconds=9.0, bpm=120, steps_per_bar=12, meter=METER_34)
+    assert fit["beat_duration_seconds"] == pytest.approx(0.5)
+    assert fit["bar_duration_seconds"] == pytest.approx(1.5)
+
+
+def test_loop_fit_68_uses_dotted_quarter_beat() -> None:
+    fit = calculate_loop_fit(duration_seconds=4.0, bpm=120, steps_per_bar=12, meter=METER_68)
+    assert fit["beat_duration_seconds"] == pytest.approx(0.5)
+    assert fit["bar_duration_seconds"] == pytest.approx(1.0)
+
+
+def test_loop_fit_34_extra_beat_uses_meter() -> None:
+    fit = calculate_loop_fit(duration_seconds=2.0, bpm=120, steps_per_bar=12, meter=METER_34)
+    assert fit["duration_fit"] == "extra_beat"
+    assert "3/4" not in " ".join(fit["loop_warnings"])
+    # The meter display only appears in partial_bar warnings
+
+def test_loop_fit_34_partial_uses_meter_in_warning() -> None:
+    bar_dur_34 = 3 * 60.0 / 120.0
+    fit = calculate_loop_fit(duration_seconds=bar_dur_34 * 1.4, bpm=120, steps_per_bar=12, meter=METER_34)
+    assert "3/4" in fit["loop_warnings"][0]
+    assert "not aligned" in fit["loop_warnings"][0]
+
+
+def test_generation_with_meter_34_uses_correct_steps() -> None:
+    analysis = fake_analysis()
+    analysis.meter = METER_34
+    analysis.steps_per_bar = 12
+    controls = GenerationControls(meter=METER_34)
+    pattern = generate_pattern(analysis, "minimal", seed=42, controls=controls)
+    assert pattern.meter.display == "3/4"
+    assert pattern.steps_per_bar == 12
+
+
+def test_generation_with_meter_68_uses_correct_steps() -> None:
+    analysis = fake_analysis()
+    analysis.meter = METER_68
+    analysis.steps_per_bar = 12
+    controls = GenerationControls(meter=METER_68)
+    pattern = generate_pattern(analysis, "minimal", seed=42, controls=controls)
+    assert pattern.meter.display == "6/8"
+    assert pattern.steps_per_bar == 12
+
+
+def test_midi_export_time_signature_matches_meter(tmp_path: Path) -> None:
+    from breaksmith.exporters.midi import write_midi
+    analysis = fake_analysis()
+    analysis.meter = METER_34
+    controls = GenerationControls(meter=METER_34)
+    pattern = generate_pattern(analysis, "minimal", seed=42, controls=controls)
+    output = tmp_path / "test.mid"
+    write_midi(pattern, output)
+    midi = MidiFile(output)
+    time_sigs = [
+        msg for track in midi.tracks for msg in track if msg.type == "time_signature"
+    ]
+    assert len(time_sigs) == 1
+    assert time_sigs[0].numerator == 3
+    assert time_sigs[0].denominator == 4
+
+
+def test_midi_export_time_signature_68(tmp_path: Path) -> None:
+    from breaksmith.exporters.midi import write_midi
+    analysis = fake_analysis()
+    analysis.meter = METER_68
+    controls = GenerationControls(meter=METER_68)
+    pattern = generate_pattern(analysis, "minimal", seed=42, controls=controls)
+    output = tmp_path / "test.mid"
+    write_midi(pattern, output)
+    midi = MidiFile(output)
+    time_sigs = [
+        msg for track in midi.tracks for msg in track if msg.type == "time_signature"
+    ]
+    assert len(time_sigs) == 1
+    assert time_sigs[0].numerator == 6
+    assert time_sigs[0].denominator == 8
+
+
+def test_strudel_export_cpm_uses_meter(tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.meter = METER_34
+    controls = GenerationControls(meter=METER_34)
+    pattern = generate_pattern(analysis, "minimal", seed=42, controls=controls)
+    output = tmp_path / "test.strudel.js"
+    write_strudel(pattern, output)
+    text = output.read_text(encoding="utf-8")
+    assert f"setcpm({pattern.bpm:.6g} / 3)" in text
+
+
+def test_synth_step_duration_for_34() -> None:
+    from breaksmith.synth import render_preview
+    analysis = fake_analysis()
+    analysis.meter = METER_34
+    controls = GenerationControls(meter=METER_34)
+    pattern = generate_pattern(analysis, "minimal", seed=42, controls=controls)
+    sr = 44100
+    audio = render_preview(pattern, sample_rate=sr, seed=42)
+    step_dur = (60.0 / pattern.bpm) * 3 / pattern.steps_per_bar
+    expected_seconds = pattern.bars * pattern.steps_per_bar * step_dur
+    padding = max(INSTRUMENT_DURATIONS.values()) * 1.2
+    expected_samples = max(1, round((expected_seconds + padding) * sr))
+    assert len(audio) == expected_samples
+
+
+def test_click_downbeat_for_34_meter(tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.meter = METER_34
+    analysis.duration_seconds = 3.0
+    analysis.bpm = 120.0
+    analysis.grid_start_seconds = 0.0
+    analysis.beat_duration_seconds = 0.5
+    source = tmp_path / "source.wav"
+    import soundfile as sf
+    import numpy as np
+    sf.write(source, np.zeros(int(3.0 * 4000), dtype=np.float32), 4000)
+    click_path, _ = render_click_tracks(source, analysis, tmp_path)
+    click, sr = sf.read(click_path, dtype="float32")
+    assert sr == 4000
+    assert len(click) > 0
+
+
+def test_groove_validation_accepts_meter_in_compatible_list() -> None:
+    # All current grooves list "4/4", "3/4", "6/8" as compatible
+    c = GenerationControls(meter=METER_68)
+    c.validate()  # should not raise
+
+
+def test_cli_parser_accepts_time_signature_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["analyze", "input.wav", "--time-signature", "3/4"])
+    assert args.time_signature == "3/4"
+    args2 = parser.parse_args(["generate", "input.wav", "--time-signature", "6/8"])
+    assert args2.time_signature == "6/8"
+
+
+def test_cli_parser_accepts_beat_grouping_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["analyze", "input.wav", "--time-signature", "6/8", "--beat-grouping", "3+3"])
+    assert args.beat_grouping == "3+3"
+
+
+def test_cli_parser_rejects_unsupported_time_signature() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["analyze", "input.wav", "--time-signature", "5/4"])
 
 
 def test_no_stale_branding_in_active_source_files() -> None:

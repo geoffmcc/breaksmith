@@ -42,7 +42,6 @@ The following are explicitly out of scope:
 - **Full track generation** — Breaksmith generates drum patterns, not complete songs. No melody, bass, harmony, or arrangement of non-percussive elements.
 - **Mix/master** — No EQ, compression, reverb, or mastering. Output is dry drum MIDI and a basic synthesized preview.
 - **Real-time performance** — No live input, MIDI controller support, or interactive jam mode. Generation is a batch process from audio input to file output.
-- **Non-4/4 time signatures** — The grid model assumes 4/4. Other time signatures would require a fundamental grid rewrite.
 - **Source modification** — Breaksmith analyzes and uses source features. It does not modify, trim, stretch, or transform the source audio.
 - **Cloud/API service** — Breaksmith is a CLI tool. No web API, no SaaS, no database.
 
@@ -59,3 +58,4 @@ The following are explicitly out of scope:
 | 0.1.0 | Initial release: analyze, generate (DnB + hip-hop), MIDI/JSON/Strudel export, preview synth, swing/humanize/variation, source restraint, BPM override, click track |
 | 0.1.1 | Phrase awareness, groove templates, per-layer density, velocity curves, reproducibility metadata |
 | 0.1.2 | Variants, comparison preview, `--preview-bars`, CLI documentation |
+| 0.2.0 | Meter support: `--time-signature` and `--beat-grouping` flags, `Meter` dataclass with 4/4, 3/4, 6/8 presets, MIDI time signature meta event, Strudel `setcpm()`, meter-relative click track, 76 new tests |

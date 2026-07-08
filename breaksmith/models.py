@@ -9,6 +9,206 @@ from typing import Any
 INSTRUMENTS = ("kick", "snare", "closed_hat", "open_hat", "percussion")
 DURATION_FITS = ("clean", "small_tail", "extra_beat", "partial_bar")
 
+
+@dataclass(frozen=True, slots=True)
+class Meter:
+    numerator: int
+    denominator: int
+    beat_groups: tuple[int, ...]
+    tempo_unit: str
+    primary_beats_per_bar: int
+    pulses_per_bar: int
+    steps_per_bar: int
+
+    @property
+    def display(self) -> str:
+        return f"{self.numerator}/{self.denominator}"
+
+    @property
+    def is_compound(self) -> bool:
+        return self.numerator % 3 == 0 and self.denominator == 8
+
+    @property
+    def is_simple(self) -> bool:
+        return not self.is_compound
+
+    @property
+    def beat_group_count(self) -> int:
+        return len(self.beat_groups)
+
+    def step_group(self, step: int) -> int:
+        """Return which primary-beat group a step belongs to (0-indexed)."""
+        if not self.beat_groups or self.steps_per_bar <= 0:
+            return 0
+        steps_per_primary = self.steps_per_bar / max(1, self.primary_beats_per_bar)
+        return min(len(self.beat_groups) - 1, int(step // steps_per_primary))
+
+    def beat_for_step(self, step: int) -> int:
+        """Return the primary beat index for a given step."""
+        if self.steps_per_bar <= 0:
+            return 0
+        steps_per_beat = self.steps_per_bar / max(1, self.primary_beats_per_bar)
+        return int(step // steps_per_beat)
+
+    def step_in_beat(self, step: int) -> int:
+        """Return the sub-step position within the primary beat."""
+        if self.steps_per_bar <= 0:
+            return 0
+        steps_per_beat = self.steps_per_bar / max(1, self.primary_beats_per_bar)
+        return int(step % steps_per_beat)
+
+    def is_downbeat(self, step: int) -> bool:
+        """True if step lands on the first primary beat."""
+        return step == 0
+
+    def is_primary_beat(self, step: int) -> bool:
+        """True if step lands on any primary beat (including downbeat)."""
+        if self.steps_per_bar <= 0 or self.primary_beats_per_bar <= 0:
+            return False
+        steps_per_beat = self.steps_per_bar / self.primary_beats_per_bar
+        return step % steps_per_beat == 0
+
+    def accent_strength(self, step: int) -> float:
+        """Accent strength for a step: 1.0 = strong, ~0.7 = secondary, 0.0 = none."""
+        if step == 0:
+            return 1.0
+        if not self.beat_groups:
+            return 0.0
+        steps_per_primary = self.steps_per_bar / max(1, self.primary_beats_per_bar)
+        beat_idx = int(step // steps_per_primary)
+        if step % steps_per_primary != 0:
+            return 0.0
+        cumulative = 0
+        for i, group_size in enumerate(self.beat_groups):
+            cumulative += group_size
+            if beat_idx < cumulative:
+                return 0.7 if i > 0 else 1.0
+        return 0.0
+
+    def downbeat_steps(self) -> list[int]:
+        """List of step positions that are primary beats."""
+        if self.steps_per_bar <= 0 or self.primary_beats_per_bar <= 0:
+            return [0]
+        steps_per_beat = self.steps_per_bar / self.primary_beats_per_bar
+        return [round(i * steps_per_beat) for i in range(self.primary_beats_per_bar)]
+
+    def group_accent_steps(self) -> list[tuple[int, float]]:
+        """List of (step, strength) for beat-group accents within a bar."""
+        if not self.beat_groups:
+            return [(0, 1.0)]
+        steps_per_primary = self.steps_per_bar / max(1, self.primary_beats_per_bar)
+        result = []
+        for i in range(len(self.beat_groups)):
+            step = round(i * steps_per_primary)
+            strength = 1.0 if i == 0 else 0.7
+            result.append((step, strength))
+        return result
+
+    def beat_duration(self, bpm: float) -> float:
+        if bpm <= 0:
+            return 0.0
+        return 60.0 / bpm
+
+    def bar_duration(self, bpm: float) -> float:
+        if bpm <= 0:
+            return 0.0
+        return self.primary_beats_per_bar * self.beat_duration(bpm)
+
+    def step_duration(self, bpm: float) -> float:
+        if bpm <= 0 or self.steps_per_bar <= 0:
+            return 0.0
+        return self.bar_duration(bpm) / self.steps_per_bar
+
+    def pulse_duration(self, bpm: float) -> float:
+        """Duration of one pulse (eighth note in 6/8, quarter in 4/4)."""
+        if bpm <= 0 or self.pulses_per_bar <= 0:
+            return 0.0
+        return self.bar_duration(bpm) / self.pulses_per_bar
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "numerator": self.numerator,
+            "denominator": self.denominator,
+            "display": self.display,
+            "beat_groups": list(self.beat_groups),
+            "tempo_unit": self.tempo_unit,
+            "primary_beats_per_bar": self.primary_beats_per_bar,
+            "pulses_per_bar": self.pulses_per_bar,
+            "steps_per_bar": self.steps_per_bar,
+        }
+
+
+METER_44 = Meter(
+    numerator=4, denominator=4,
+    beat_groups=(1, 1, 1, 1),
+    tempo_unit="quarter",
+    primary_beats_per_bar=4,
+    pulses_per_bar=4,
+    steps_per_bar=16,
+)
+
+METER_34 = Meter(
+    numerator=3, denominator=4,
+    beat_groups=(1, 1, 1),
+    tempo_unit="quarter",
+    primary_beats_per_bar=3,
+    pulses_per_bar=3,
+    steps_per_bar=12,
+)
+
+METER_68 = Meter(
+    numerator=6, denominator=8,
+    beat_groups=(3, 3),
+    tempo_unit="dotted_quarter",
+    primary_beats_per_bar=2,
+    pulses_per_bar=6,
+    steps_per_bar=12,
+)
+
+METER_PRESETS: dict[str, Meter] = {
+    "4/4": METER_44,
+    "3/4": METER_34,
+    "6/8": METER_68,
+}
+
+
+def parse_time_signature(value: str) -> Meter:
+    parts = value.split("/")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid time signature: '{value}'. Use format '4/4', '3/4', '6/8'.")
+    key = value.strip()
+    if key not in METER_PRESETS:
+        allowed = ", ".join(METER_PRESETS)
+        raise ValueError(f"Unsupported time signature: '{key}'. Supported: {allowed}")
+    return METER_PRESETS[key]
+
+
+def validate_beat_grouping(meter: Meter, grouping: str | None) -> Meter:
+    if grouping is None:
+        return meter
+    parts = [int(p) for p in grouping.split("+")]
+    if len(parts) != meter.beat_group_count:
+        raise ValueError(
+            f"Beat grouping '{grouping}' has {len(parts)} groups, "
+            f"but {meter.display} expects {meter.beat_group_count} groups "
+            f"({' + '.join(str(g) for g in meter.beat_groups)})."
+        )
+    if sum(parts) != meter.pulses_per_bar:
+        raise ValueError(
+            f"Beat grouping '{grouping}' sums to {sum(parts)}, "
+            f"but {meter.display} has {meter.pulses_per_bar} pulses per bar. "
+            f"Expected: {'+'.join(str(g) for g in meter.beat_groups)}"
+        )
+    return Meter(
+        numerator=meter.numerator,
+        denominator=meter.denominator,
+        beat_groups=tuple(parts),
+        tempo_unit=meter.tempo_unit,
+        primary_beats_per_bar=meter.primary_beats_per_bar,
+        pulses_per_bar=meter.pulses_per_bar,
+        steps_per_bar=meter.steps_per_bar,
+    )
+
 GENRES = ("dnb", "hiphop")
 
 DNB_STYLES = ("minimal", "rolling", "aggressive", "liquid", "jungle", "halfstep", "techstep")
@@ -122,6 +322,7 @@ class AudioAnalysis:
     bar_density: list[float] = field(default_factory=list)
     bar_brightness: list[float] = field(default_factory=list)
     bar_silence: list[float] = field(default_factory=list)
+    meter: Meter = METER_44
     grid_start_seconds: float = 0.0
     downbeat_seconds: float = 0.0
     grid_start_source: str = "detected"
@@ -176,6 +377,7 @@ class DrumPattern:
     hits: dict[str, list[Hit]]
     source_audio: str
     seed: int
+    meter: Meter = METER_44
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -388,6 +590,7 @@ class GrooveTemplate:
     name: str
     description: str
     timing_offsets: tuple[float, ...]
+    compatible_meters: tuple[str, ...] = ("4/4", "3/4", "6/8")
 
 
 GROOVE_PRESETS: dict[str, GrooveTemplate] = {
@@ -398,7 +601,7 @@ GROOVE_PRESETS: dict[str, GrooveTemplate] = {
     ),
     "mpc": GrooveTemplate(
         name="mpc",
-        description="Classic MPC 16-level swing: off-beat 16ths pushed slightly late.",
+        description="Classic MPC-style swing: off-beat 16ths pushed slightly late.",
         timing_offsets=(
             0.000, 0.000, 0.014, 0.000,
             0.000, 0.000, 0.014, 0.000,

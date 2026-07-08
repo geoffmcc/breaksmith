@@ -31,7 +31,7 @@ output/
 - **Format**: Standard MIDI File Type 1 (multi-track)
 - **Tracks**: one track per instrument (5 tracks)
 - **Tempo**: set to detected or user-specified BPM
-- **Time signature**: 4/4
+- **Time signature**: set from the analysis meter (default 4/4; changes to 3/4 or 6/8 when `--time-signature` is used)
 - **Note mapping**:
 
 | Track | MIDI Note | Drum |
@@ -228,6 +228,7 @@ Generated during the analyze step (and re-run during generate for fresh analysis
 - **Number of bars** (`num_bars`)
 - **Duration fit** (`duration_fit`): `clean`, `small_tail`, `extra_beat`, or `partial_bar`
 - **Duration fit details**: reason for the fit classification
+- **Meter** (`meter`): time signature object with numerator, denominator, beat_groups, tempo_unit, primary_beats_per_bar, pulses_per_bar, steps_per_bar
 - **File properties**: path, extension, format
 - **Feature maps**: step-level arrays for onset, low, high, energy, silence, brightness, sustain, flux
 - **Beat positions**: list of detected beat times in seconds

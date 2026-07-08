@@ -82,6 +82,18 @@ Choose an output directory:
 uv run breaksmith generate path/to/loop.wav --output output/my-loop
 ```
 
+Generate with an arrangement preset and audio preview:
+
+```bash
+uv run breaksmith generate path/to/loop.wav --structure build-drop --preview
+```
+
+Generate with a custom velocity curve:
+
+```bash
+uv run breaksmith generate path/to/loop.wav --midi-velocity-curve exponential
+```
+
 ## Styles
 
 - `minimal`: sparse, clean, restrained, with strong space between hits.
@@ -107,6 +119,9 @@ Use `--style all` to generate every style, or select one style with `--style rol
 - `--downbeat-start`: manual first downbeat in seconds; overrides `--grid-start`.
 - `--steps-per-bar`: grid resolution; must be a positive multiple of four.
 - `--features-csv`: write step-level source activity maps for diagnostics.
+- `--preview`: render a WAV audio preview of each generated pattern (requires FFmpeg).
+- `--structure`: section arrangement preset (`short`, `medium`, `full`, `build-drop`, `minimal`, or a custom bar-per-section spec).
+- `--midi-velocity-curve`: velocity mapping curve (`linear`, `exponential`, `compressed`, or `hard`).
 
 The same audio analysis, style, controls, and seed should produce deterministic output.
 
@@ -127,7 +142,9 @@ output/
 └── techstep/
 ```
 
-JSON preserves the logical grid and includes per-hit `timing_offset_steps` when swing or humanization is applied. MIDI renders those timing offsets as tick offsets while keeping events ordered. Strudel output keeps the pattern readable on the logical grid and documents the timing controls in comments rather than emitting complex timing transforms.
+JSON preserves the logical grid and includes per-hit `timing_offset_steps` when swing or humanization is applied. MIDI renders those timing offsets as tick offsets while keeping events ordered; it also writes per-instrument note lengths, note-off release velocities, groove feel markers, and section markers. Strudel output keeps the pattern readable on the logical grid and documents the timing controls in comments rather than emitting complex timing transforms.
+
+When `--structure` is used, the output pattern contains a `section` metadata field and an `arrangement` field in JSON. MIDI exports include section marker events for DAW navigation.
 
 ## Ableton Workflow
 
@@ -143,12 +160,12 @@ Open `pattern.strudel.js` in Strudel or paste it into the Strudel editor. The ex
 - Works best with steady-tempo loops and rough tracks.
 - Downbeat detection is intentionally simple.
 - Strudel timing output is intentionally grid-readable; detailed swing/humanization is represented in JSON and MIDI.
-- Breaksmith generates MIDI, Strudel, and JSON, but does not render audio previews yet.
+- Breaksmith generates MIDI, Strudel, and JSON, and can render WAV audio previews with `--preview`.
 - It does not include stem separation, chord recognition, model training, or natural-language generation yet.
 
 ## Project Direction
 
-Near-term work is focused on making Breaksmith a reliable local music tool with strong generator controls, useful style presets, and testable exports. Future directions include rendered audio previews, user-supplied drum kits, Ableton/MPC-oriented exports, section-aware arrangements, style preset files, prompt-directed parameter control, and a local GUI or web interface.
+Near-term work is focused on making Breaksmith a reliable local music tool with strong generator controls, useful style presets, and testable exports. Future directions include user-supplied drum kits, Ableton/MPC-oriented exports, style preset files, prompt-directed parameter control, and a local GUI or web interface.
 
 ## Run Tests
 

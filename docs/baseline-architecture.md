@@ -8,8 +8,10 @@ This report captures the current Breaksmith architecture and musical baseline be
 - `breaksmith/models.py`: shared dataclasses for `AudioAnalysis`, `Hit`, and `DrumPattern`.
 - `breaksmith/generator.py`: style presets, generation controls, deterministic seeded pattern generation, timing offsets, and pattern metadata.
 - `breaksmith/cli.py`: `analyze` and `generate` commands, argument validation, diagnostics, and export orchestration.
+- `breaksmith/synth.py`: drum sound synthesis (kick, snare, hat, percussion) used for audio preview rendering.
+- `breaksmith/models.py`: shared dataclasses for `AudioAnalysis`, `Hit`, `DrumPattern`, `Section`, and `Arrangement`.
 - `breaksmith/exporters/json_export.py`: JSON output for analysis and patterns.
-- `breaksmith/exporters/midi.py`: multi-track General MIDI drum export.
+- `breaksmith/exporters/midi.py`: multi-track General MIDI drum export with per-instrument note lengths, velocity curves, note-off velocities, groove markers, and section markers.
 - `breaksmith/exporters/strudel.py`: editable Strudel pattern export.
 - `tests/test_generator.py`: unit and integration coverage for generation, loop-fit diagnostics, exporters, CLI parser behavior, and stale branding.
 
@@ -40,10 +42,7 @@ Timing is calculated in `analysis.py`.
 
 Known timing limitations:
 
-- There is no explicit user-facing `--grid-start` or downbeat override yet.
-- Tempo confidence and beat confidence are not exposed.
 - Pickup handling is heuristic-only.
-- There is no click render to audibly verify beat and bar alignment.
 - Downbeat detection is currently simple and should be treated as a risk area.
 
 ## Source Activity Maps
@@ -107,11 +106,8 @@ Generation already handles requested bars greater than analyzed bars by cycling 
 
 Musical limitations:
 
-- There is no explicit arrangement plan or phrase-role object.
-- Phrase behavior is limited to phrase-end fill checks.
 - Styles are more than raw probabilities, but they are not yet full grammars or template systems.
 - Drum decisions are still mostly local step decisions rather than phrase-aware event scoring.
-- Humanization uses independent random timing/velocity offsets, not structured groove feel.
 - Generated hits do not carry provenance, confidence, lock state, duration, or stable IDs.
 
 ## Export Architecture Baseline
@@ -139,7 +135,6 @@ Strudel:
 
 Export limitations:
 
-- There is no audio preview renderer yet.
 - MIDI does not yet provide separate files per instrument or configurable mappings.
 - Strudel does not represent detailed swing/humanization beyond comments.
 - Export validation is covered by tests but not centralized as a pattern validation stage.
@@ -166,8 +161,6 @@ Important options:
 
 CLI limitations:
 
-- No `--grid-start` override yet.
-- No click diagnostic render yet.
 - No `render`, `revise`, `inspect`, or kit commands yet.
 - There is no cache for analysis within repeated workflows.
 
@@ -197,9 +190,7 @@ This is acceptable for the current sample but highlights why Phase 1 should add 
 - Source feature extraction and loop-fit diagnostics currently live in the same module.
 - `AudioAnalysis` is growing and may need nested typed structures as analysis maps expand.
 - Generation mixes style grammar, source response, phrase behavior, random selection, and humanization in one function.
-- There is no intermediate arrangement plan between analysis and event generation.
 - There is no central pattern validation stage before export.
-- Humanization and swing need to be made structured before preview rendering and DAW export become more important.
 
 ## Phase 1 Entry Criteria
 

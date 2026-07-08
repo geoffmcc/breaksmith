@@ -23,6 +23,18 @@ class AudioAnalysis:
     low_activity: list[float]
     high_activity: list[float]
     bar_energy: list[float]
+    low_mid_activity: list[float] = field(default_factory=list)
+    mid_activity: list[float] = field(default_factory=list)
+    rms_activity: list[float] = field(default_factory=list)
+    transient_activity: list[float] = field(default_factory=list)
+    sustain_activity: list[float] = field(default_factory=list)
+    local_density: list[float] = field(default_factory=list)
+    silence_activity: list[float] = field(default_factory=list)
+    brightness_activity: list[float] = field(default_factory=list)
+    spectral_flux: list[float] = field(default_factory=list)
+    bar_density: list[float] = field(default_factory=list)
+    bar_brightness: list[float] = field(default_factory=list)
+    bar_silence: list[float] = field(default_factory=list)
     grid_start_seconds: float = 0.0
     downbeat_seconds: float = 0.0
     grid_start_source: str = "detected"

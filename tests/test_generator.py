@@ -13,7 +13,7 @@ from mido import MidiFile
 
 import breaksmith
 import breaksmith.cli as cli
-from breaksmith.analysis import calculate_loop_fit
+from breaksmith.analysis import calculate_loop_fit, extract_activity_maps
 from breaksmith.click import render_click_tracks
 from breaksmith.cli import build_parser
 from breaksmith.exporters.json_export import write_pattern
@@ -82,6 +82,59 @@ def analysis_with_loop_duration(duration_seconds: float) -> AudioAnalysis:
 
 def bars_duration(bars: float, bpm: float = 172.0) -> float:
     return bars * 4 * 60 / bpm
+
+
+def test_activity_maps_distinguish_low_and_high_frequency_regions() -> None:
+    sample_rate = 8000
+    t = np.arange(sample_rate * 2) / sample_rate
+    y = np.zeros_like(t, dtype=np.float32)
+    y[:sample_rate] = 0.5 * np.sin(2 * np.pi * 80 * t[:sample_rate])
+    y[sample_rate:] = 0.5 * np.sin(2 * np.pi * 3000 * t[sample_rate:])
+    step_times = np.linspace(0, 1.75, 8)
+    maps = extract_activity_maps(
+        y=y,
+        sample_rate=sample_rate,
+        step_times=step_times,
+        steps_per_bar=4,
+        onset_envelope=np.zeros(32),
+        hop_length=512,
+    )
+    assert np.mean(maps["low_activity"][:4]) > np.mean(maps["low_activity"][4:])
+    assert np.mean(maps["high_activity"][4:]) > np.mean(maps["high_activity"][:4])
+    assert len(maps["bar_energy"]) == 2
+
+
+def test_activity_maps_detect_silence_and_avoid_nan() -> None:
+    sample_rate = 8000
+    step_times = np.linspace(0, 1.75, 8)
+    maps = extract_activity_maps(
+        y=np.zeros(sample_rate * 2, dtype=np.float32),
+        sample_rate=sample_rate,
+        step_times=step_times,
+        steps_per_bar=4,
+        onset_envelope=np.zeros(32),
+        hop_length=512,
+    )
+    for values in maps.values():
+        assert np.all(np.isfinite(values))
+    assert min(maps["silence_activity"]) == pytest.approx(1.0)
+
+
+def test_activity_maps_expose_sustain_for_steady_tone() -> None:
+    sample_rate = 8000
+    t = np.arange(sample_rate * 2) / sample_rate
+    y = (0.4 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    step_times = np.linspace(0, 1.75, 8)
+    maps = extract_activity_maps(
+        y=y,
+        sample_rate=sample_rate,
+        step_times=step_times,
+        steps_per_bar=4,
+        onset_envelope=np.zeros(32),
+        hop_length=512,
+    )
+    assert np.mean(maps["sustain_activity"]) > np.mean(maps["transient_activity"])
+    assert len(maps["mid_activity"]) == 8
 
 
 def test_loop_fit_clean_8_bar_loop() -> None:
@@ -366,6 +419,7 @@ def test_analyze_output_includes_grid_fit_diagnostics(monkeypatch, capsys, tmp_p
         grid_start=None,
         downbeat_start=None,
         render_click=False,
+        features_csv=None,
     )
     assert cli._run_analyze(args) == 0
     output = capsys.readouterr().out
@@ -395,6 +449,7 @@ def test_analyze_passes_manual_grid_start_to_analysis(monkeypatch, tmp_path: Pat
         grid_start=0.125,
         downbeat_start=None,
         render_click=False,
+        features_csv=None,
     )
     assert cli._run_analyze(args) == 0
     assert captured == {"grid_start_override": 0.125, "downbeat_override": None}
@@ -418,6 +473,7 @@ def test_analyze_output_includes_timing_confidence(monkeypatch, capsys, tmp_path
         grid_start=0.125,
         downbeat_start=None,
         render_click=False,
+        features_csv=None,
     )
     assert cli._run_analyze(args) == 0
     output = capsys.readouterr().out
@@ -444,10 +500,40 @@ def test_analyze_render_click_writes_diagnostic_files(monkeypatch, tmp_path: Pat
         grid_start=0.25,
         downbeat_start=None,
         render_click=True,
+        features_csv=None,
     )
     assert cli._run_analyze(args) == 0
     assert (tmp_path / "analysis-click.wav").exists()
     assert (tmp_path / "source-with-click.wav").exists()
+
+
+def test_analyze_writes_feature_csv(monkeypatch, tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.rms_activity = [0.1] * len(analysis.step_times)
+    analysis.low_mid_activity = [0.2] * len(analysis.step_times)
+    analysis.mid_activity = [0.3] * len(analysis.step_times)
+    analysis.transient_activity = [0.4] * len(analysis.step_times)
+    analysis.sustain_activity = [0.5] * len(analysis.step_times)
+    analysis.local_density = [0.6] * len(analysis.step_times)
+    analysis.silence_activity = [0.7] * len(analysis.step_times)
+    analysis.brightness_activity = [0.8] * len(analysis.step_times)
+    analysis.spectral_flux = [0.9] * len(analysis.step_times)
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    features_csv = tmp_path / "features.csv"
+    args = argparse.Namespace(
+        audio=Path("test.wav"),
+        output=tmp_path / "analysis.json",
+        bpm=172.0,
+        steps_per_bar=16,
+        grid_start=None,
+        downbeat_start=None,
+        render_click=False,
+        features_csv=features_csv,
+    )
+    assert cli._run_analyze(args) == 0
+    text = features_csv.read_text(encoding="utf-8")
+    assert "low_mid_activity" in text
+    assert "spectral_flux" in text
 
 
 def test_generate_output_suggests_bars_for_extra_beat_source(

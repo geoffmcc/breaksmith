@@ -119,6 +119,95 @@ def _sample_feature_at_times(
     return feature[indexes]
 
 
+def _band_mean(stft: np.ndarray, frequencies: np.ndarray, low: float, high: float) -> np.ndarray:
+    mask = (frequencies >= low) & (frequencies < high)
+    if np.any(mask):
+        return stft[mask].mean(axis=0)
+    return np.zeros(stft.shape[1], dtype=float)
+
+
+def _bar_means(values: np.ndarray, steps_per_bar: int) -> list[float]:
+    return [
+        round(float(np.mean(values[index : index + steps_per_bar])), 6)
+        for index in range(0, len(values), steps_per_bar)
+    ]
+
+
+def extract_activity_maps(
+    *,
+    y: np.ndarray,
+    sample_rate: int,
+    step_times: np.ndarray,
+    steps_per_bar: int,
+    onset_envelope: np.ndarray,
+    hop_length: int,
+) -> dict[str, list[float]]:
+    stft = np.abs(librosa.stft(y=y, n_fft=2048, hop_length=hop_length))
+    frequencies = librosa.fft_frequencies(sr=sample_rate, n_fft=2048)
+    frame_times = librosa.frames_to_time(
+        np.arange(stft.shape[1]),
+        sr=sample_rate,
+        hop_length=hop_length,
+    )
+
+    low_feature = _band_mean(stft, frequencies, 0.0, 180.0)
+    low_mid_feature = _band_mean(stft, frequencies, 180.0, 500.0)
+    mid_feature = _band_mean(stft, frequencies, 500.0, 3000.0)
+    high_feature = _band_mean(stft, frequencies, 3000.0, float(sample_rate) / 2.0)
+
+    onset_steps = _normalize(
+        _sample_feature_at_times(onset_envelope, frame_times[: len(onset_envelope)], step_times)
+    )
+    low_steps = _normalize(_sample_feature_at_times(low_feature, frame_times, step_times))
+    low_mid_steps = _normalize(_sample_feature_at_times(low_mid_feature, frame_times, step_times))
+    mid_steps = _normalize(_sample_feature_at_times(mid_feature, frame_times, step_times))
+    high_steps = _normalize(_sample_feature_at_times(high_feature, frame_times, step_times))
+
+    rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=hop_length)[0]
+    rms_times = librosa.frames_to_time(
+        np.arange(len(rms)),
+        sr=sample_rate,
+        hop_length=hop_length,
+    )
+    rms_steps = _normalize(_sample_feature_at_times(rms, rms_times, step_times))
+
+    centroid = librosa.feature.spectral_centroid(S=stft, sr=sample_rate)[0]
+    centroid_norm = np.clip(centroid / max(1.0, sample_rate / 2.0), 0.0, 1.0)
+    brightness_steps = _normalize(_sample_feature_at_times(centroid_norm, frame_times, step_times))
+
+    flux = np.concatenate([[0.0], np.mean(np.maximum(0.0, np.diff(stft, axis=1)), axis=0)])
+    flux_steps = _normalize(_sample_feature_at_times(flux, frame_times, step_times))
+
+    transient_steps = _normalize(np.maximum(0.0, onset_steps - rms_steps * 0.35))
+    sustain_steps = _normalize(np.maximum(0.0, rms_steps - onset_steps * 0.45))
+    local_density = np.convolve(onset_steps, np.ones(3) / 3, mode="same")
+    silence_steps = np.clip(1.0 - rms_steps, 0.0, 1.0)
+
+    maps = {
+        "onset_activity": onset_steps,
+        "low_activity": low_steps,
+        "low_mid_activity": low_mid_steps,
+        "mid_activity": mid_steps,
+        "high_activity": high_steps,
+        "rms_activity": rms_steps,
+        "transient_activity": transient_steps,
+        "sustain_activity": sustain_steps,
+        "local_density": np.clip(local_density, 0.0, 1.0),
+        "silence_activity": silence_steps,
+        "brightness_activity": brightness_steps,
+        "spectral_flux": flux_steps,
+    }
+    rounded = {
+        name: [round(float(value), 6) for value in np.nan_to_num(values)]
+        for name, values in maps.items()
+    }
+    rounded["bar_energy"] = _bar_means(rms_steps, steps_per_bar)
+    rounded["bar_density"] = _bar_means(np.asarray(rounded["local_density"]), steps_per_bar)
+    rounded["bar_brightness"] = _bar_means(np.asarray(rounded["brightness_activity"]), steps_per_bar)
+    rounded["bar_silence"] = _bar_means(np.asarray(rounded["silence_activity"]), steps_per_bar)
+    return rounded
+
+
 def _coerce_tempo(value: object) -> float:
     array = np.asarray(value, dtype=float).reshape(-1)
     return float(array[0]) if array.size else 0.0
@@ -247,36 +336,14 @@ def analyze_audio(
     step_times = first_beat + np.arange(total_steps, dtype=float) * step_duration
     beat_times = first_beat + np.arange(bar_count * beats_per_bar, dtype=float) * beat_duration
 
-    stft = np.abs(librosa.stft(y=y, n_fft=2048, hop_length=hop_length))
-    frequencies = librosa.fft_frequencies(sr=sample_rate, n_fft=2048)
-    frame_times = librosa.frames_to_time(
-        np.arange(stft.shape[1]),
-        sr=sample_rate,
+    activity_maps = extract_activity_maps(
+        y=y,
+        sample_rate=sample_rate,
+        step_times=step_times,
+        steps_per_bar=steps_per_bar,
+        onset_envelope=onset_envelope,
         hop_length=hop_length,
     )
-
-    low_mask = frequencies <= 180.0
-    high_mask = frequencies >= 3000.0
-    low_feature = stft[low_mask].mean(axis=0) if np.any(low_mask) else np.zeros(stft.shape[1])
-    high_feature = stft[high_mask].mean(axis=0) if np.any(high_mask) else np.zeros(stft.shape[1])
-
-    onset_steps = _normalize(
-        _sample_feature_at_times(onset_envelope, frame_times[: len(onset_envelope)], step_times)
-    )
-    low_steps = _normalize(_sample_feature_at_times(low_feature, frame_times, step_times))
-    high_steps = _normalize(_sample_feature_at_times(high_feature, frame_times, step_times))
-
-    rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=hop_length)[0]
-    rms_times = librosa.frames_to_time(
-        np.arange(len(rms)),
-        sr=sample_rate,
-        hop_length=hop_length,
-    )
-    rms_steps = _normalize(_sample_feature_at_times(rms, rms_times, step_times))
-    bar_energy = [
-        float(np.mean(rms_steps[index : index + steps_per_bar]))
-        for index in range(0, total_steps, steps_per_bar)
-    ]
 
     return AudioAnalysis(
         source=str(audio_path.resolve()),
@@ -287,10 +354,22 @@ def analyze_audio(
         bar_count=bar_count,
         steps_per_bar=steps_per_bar,
         step_times=[round(float(value), 6) for value in step_times],
-        onset_activity=[round(float(value), 6) for value in onset_steps],
-        low_activity=[round(float(value), 6) for value in low_steps],
-        high_activity=[round(float(value), 6) for value in high_steps],
-        bar_energy=[round(float(value), 6) for value in bar_energy],
+        onset_activity=activity_maps["onset_activity"],
+        low_activity=activity_maps["low_activity"],
+        high_activity=activity_maps["high_activity"],
+        bar_energy=activity_maps["bar_energy"],
+        low_mid_activity=activity_maps["low_mid_activity"],
+        mid_activity=activity_maps["mid_activity"],
+        rms_activity=activity_maps["rms_activity"],
+        transient_activity=activity_maps["transient_activity"],
+        sustain_activity=activity_maps["sustain_activity"],
+        local_density=activity_maps["local_density"],
+        silence_activity=activity_maps["silence_activity"],
+        brightness_activity=activity_maps["brightness_activity"],
+        spectral_flux=activity_maps["spectral_flux"],
+        bar_density=activity_maps["bar_density"],
+        bar_brightness=activity_maps["bar_brightness"],
+        bar_silence=activity_maps["bar_silence"],
         grid_start_seconds=float(loop_fit["grid_start_seconds"]),
         downbeat_seconds=float(loop_fit["grid_start_seconds"]),
         grid_start_source=grid_start_source,

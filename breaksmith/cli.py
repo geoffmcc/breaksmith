@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .analysis import analyze_audio
 from .click import render_click_tracks
-from .exporters.json_export import write_analysis, write_pattern
+from .exporters.json_export import write_analysis, write_feature_csv, write_pattern
 from .exporters.midi import write_midi
 from .exporters.strudel import write_strudel
 from .generator import STYLE_CONFIG, GenerationControls, generate_pattern
@@ -84,6 +84,20 @@ def _print_loop_diagnostics(analysis: AudioAnalysis) -> None:
         print("Suggestion: confirm the intended length or pass --bars explicitly.")
 
 
+def _print_feature_summary(analysis: AudioAnalysis) -> None:
+    if not analysis.rms_activity:
+        return
+    density = sum(analysis.local_density) / max(1, len(analysis.local_density))
+    brightness = sum(analysis.brightness_activity) / max(1, len(analysis.brightness_activity))
+    silence = sum(analysis.silence_activity) / max(1, len(analysis.silence_activity))
+    sustain = sum(analysis.sustain_activity) / max(1, len(analysis.sustain_activity))
+    print(
+        "Source features: "
+        f"density={density:.2f}, brightness={brightness:.2f}, "
+        f"sustain={sustain:.2f}, silence={silence:.2f}"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="breaksmith",
@@ -110,6 +124,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--render-click",
         action="store_true",
         help="Render analysis-click.wav and source-with-click.wav next to the analysis output",
+    )
+    analyze_parser.add_argument(
+        "--features-csv",
+        type=Path,
+        help="Write step-level source activity maps as CSV",
     )
 
     generate_parser = subparsers.add_parser(
@@ -184,8 +203,13 @@ def _run_analyze(args: argparse.Namespace) -> int:
     print(f"BPM: {analysis.bpm:.2f}")
     print(f"Duration: {analysis.duration_seconds:.2f}s")
     _print_loop_diagnostics(analysis)
+    _print_feature_summary(analysis)
     print(f"Detected output grid: {analysis.bar_count} bars")
     print(f"Wrote: {args.output}")
+    if args.features_csv:
+        args.features_csv.parent.mkdir(parents=True, exist_ok=True)
+        write_feature_csv(analysis, args.features_csv)
+        print(f"Wrote feature CSV: {args.features_csv}")
     if args.render_click:
         click_path, mixed_path = render_click_tracks(args.audio, analysis, args.output.parent)
         print(f"Wrote click: {click_path}")

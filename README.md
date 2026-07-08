@@ -39,6 +39,12 @@ This writes `analysis-click.wav` and `source-with-click.wav` next to the analysi
 uv run breaksmith analyze path/to/loop.wav --bpm 172 --grid-start 0.125 --render-click
 ```
 
+Export step-level source activity maps as CSV:
+
+```bash
+uv run breaksmith analyze path/to/loop.wav --bpm 172 --features-csv analysis-features.csv
+```
+
 Generate all styles:
 
 ```bash
@@ -100,6 +106,7 @@ Use `--style all` to generate every style, or select one style with `--style rol
 - `--grid-start`: manual grid start in seconds.
 - `--downbeat-start`: manual first downbeat in seconds; overrides `--grid-start`.
 - `--steps-per-bar`: grid resolution; must be a positive multiple of four.
+- `--features-csv`: write step-level source activity maps for diagnostics.
 
 The same audio analysis, style, controls, and seed should produce deterministic output.
 

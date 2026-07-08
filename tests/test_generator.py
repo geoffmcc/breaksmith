@@ -6,12 +6,15 @@ import re
 from types import SimpleNamespace
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 from mido import MidiFile
 
 import breaksmith
 import breaksmith.cli as cli
 from breaksmith.analysis import calculate_loop_fit
+from breaksmith.click import render_click_tracks
 from breaksmith.cli import build_parser
 from breaksmith.exporters.json_export import write_pattern
 from breaksmith.exporters.midi import write_midi
@@ -120,6 +123,18 @@ def test_loop_fit_boundary_with_float_noise_is_clean() -> None:
     fit = calculate_loop_fit(duration_seconds=bars_duration(8) + 0.001, bpm=172.0, steps_per_bar=16)
     assert fit["duration_fit"] == "clean"
     assert fit["complete_bar_count"] == 8
+
+
+def test_loop_fit_uses_effective_duration_after_grid_start() -> None:
+    fit = calculate_loop_fit(
+        duration_seconds=0.25 + bars_duration(4),
+        bpm=172.0,
+        steps_per_bar=16,
+        grid_start_seconds=0.25,
+    )
+    assert fit["duration_fit"] == "clean"
+    assert fit["complete_bar_count"] == 4
+    assert fit["grid_start_seconds"] == pytest.approx(0.25)
 
 
 def test_package_imports_under_breaksmith() -> None:
@@ -249,6 +264,21 @@ def test_pattern_json_records_source_and_generated_bar_counts(tmp_path: Path) ->
     assert data["metadata"]["bars_override"] == 8
 
 
+def test_pattern_metadata_records_timing_confidence() -> None:
+    analysis = fake_analysis()
+    analysis.grid_start_seconds = 0.125
+    analysis.downbeat_seconds = 0.125
+    analysis.grid_start_source = "manual_grid_start"
+    analysis.tempo_confidence = 1.0
+    analysis.beat_confidence = 0.75
+    pattern = generate_pattern(analysis, "rolling", seed=42)
+    assert pattern.metadata["grid_start_seconds"] == 0.125
+    assert pattern.metadata["downbeat_seconds"] == 0.125
+    assert pattern.metadata["grid_start_source"] == "manual_grid_start"
+    assert pattern.metadata["tempo_confidence"] == 1.0
+    assert pattern.metadata["beat_confidence"] == 0.75
+
+
 def test_midi_export_completes_and_events_remain_ordered(tmp_path: Path) -> None:
     controls = GenerationControls(swing=0.2, humanize=1.0, variation=0.7)
     pattern = generate_pattern(fake_analysis(), "rolling", seed=42, controls=controls)
@@ -312,6 +342,13 @@ def test_cli_rejects_invalid_bars_values(value: str) -> None:
         parser.parse_args(["generate", "input.wav", "--bars", value])
 
 
+@pytest.mark.parametrize("option", ["--grid-start", "--downbeat-start"])
+def test_cli_rejects_negative_grid_overrides(option: str) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["analyze", "input.wav", option, "-0.1"])
+
+
 def test_requesting_more_bars_than_source_does_not_crash() -> None:
     pattern = generate_pattern(fake_analysis(), "rolling", seed=42, controls=GenerationControls(bars=12))
     assert pattern.bars == 12
@@ -326,12 +363,91 @@ def test_analyze_output_includes_grid_fit_diagnostics(monkeypatch, capsys, tmp_p
         output=tmp_path / "analysis.json",
         bpm=172.0,
         steps_per_bar=16,
+        grid_start=None,
+        downbeat_start=None,
+        render_click=False,
     )
     assert cli._run_analyze(args) == 0
     output = capsys.readouterr().out
     assert "Grid fit: 8 complete bars + 1.00 beat" in output
     assert "approximately 1 beat" in output
     assert "--bars 8" in output
+
+
+def test_analyze_passes_manual_grid_start_to_analysis(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, float | None] = {}
+
+    def fake_analyze(*args, **kwargs):
+        captured["grid_start_override"] = kwargs["grid_start_override"]
+        captured["downbeat_override"] = kwargs["downbeat_override"]
+        analysis = fake_analysis()
+        analysis.grid_start_seconds = kwargs["grid_start_override"]
+        analysis.downbeat_seconds = kwargs["grid_start_override"]
+        analysis.grid_start_source = "manual_grid_start"
+        return analysis
+
+    monkeypatch.setattr(cli, "analyze_audio", fake_analyze)
+    args = argparse.Namespace(
+        audio=Path("test.wav"),
+        output=tmp_path / "analysis.json",
+        bpm=172.0,
+        steps_per_bar=16,
+        grid_start=0.125,
+        downbeat_start=None,
+        render_click=False,
+    )
+    assert cli._run_analyze(args) == 0
+    assert captured == {"grid_start_override": 0.125, "downbeat_override": None}
+
+
+def test_analyze_output_includes_timing_confidence(monkeypatch, capsys, tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.tempo_confidence = 1.0
+    analysis.beat_confidence = 0.5
+    analysis.detected_beat_count = 8
+    analysis.expected_beat_count = 16
+    analysis.grid_start_seconds = 0.125
+    analysis.downbeat_seconds = 0.125
+    analysis.grid_start_source = "manual_grid_start"
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    args = argparse.Namespace(
+        audio=Path("test.wav"),
+        output=tmp_path / "analysis.json",
+        bpm=172.0,
+        steps_per_bar=16,
+        grid_start=0.125,
+        downbeat_start=None,
+        render_click=False,
+    )
+    assert cli._run_analyze(args) == 0
+    output = capsys.readouterr().out
+    assert "Timing confidence: tempo=1.00, beat=0.50 (8/16 beats)" in output
+    assert "Grid start: 0.125s (manual_grid_start); downbeat: 0.125s" in output
+
+
+def test_analyze_render_click_writes_diagnostic_files(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.wav"
+    sf.write(source, np.zeros(4000, dtype=np.float32), 4000)
+    analysis = fake_analysis()
+    analysis.source = str(source)
+    analysis.duration_seconds = 1.0
+    analysis.bpm = 120.0
+    analysis.grid_start_seconds = 0.25
+    analysis.downbeat_seconds = 0.25
+    analysis.beat_duration_seconds = 0.5
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    args = argparse.Namespace(
+        audio=source,
+        output=tmp_path / "analysis.json",
+        bpm=120.0,
+        steps_per_bar=16,
+        grid_start=0.25,
+        downbeat_start=None,
+        render_click=True,
+    )
+    assert cli._run_analyze(args) == 0
+    assert (tmp_path / "analysis-click.wav").exists()
+    assert (tmp_path / "source-with-click.wav").exists()
 
 
 def test_generate_output_suggests_bars_for_extra_beat_source(
@@ -353,6 +469,8 @@ def test_generate_output_suggests_bars_for_extra_beat_source(
         swing=0.0,
         humanize=0.0,
         variation=0.25,
+        grid_start=None,
+        downbeat_start=None,
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -376,12 +494,35 @@ def test_generate_output_reports_exact_requested_bars(monkeypatch, capsys, tmp_p
         swing=0.0,
         humanize=0.0,
         variation=0.25,
+        grid_start=None,
+        downbeat_start=None,
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
     assert "Requested grid: 8 bars" in output
     assert "Ignoring 0.35s of source audio beyond the requested grid boundary." in output
     assert "Generated exactly 8 bars." in output
+
+
+def test_render_click_tracks_places_clicks_at_grid_positions(tmp_path: Path) -> None:
+    source = tmp_path / "source.wav"
+    sample_rate = 4000
+    sf.write(source, np.zeros(sample_rate, dtype=np.float32), sample_rate)
+    analysis = fake_analysis()
+    analysis.duration_seconds = 1.0
+    analysis.grid_start_seconds = 0.25
+    analysis.downbeat_seconds = 0.25
+    analysis.beat_duration_seconds = 0.5
+    click_path, mixed_path = render_click_tracks(source, analysis, tmp_path)
+    click, sr = sf.read(click_path, dtype="float32")
+    mixed, mixed_sr = sf.read(mixed_path, dtype="float32")
+    assert sr == sample_rate
+    assert mixed_sr == sample_rate
+    assert len(click) == sample_rate
+    assert len(mixed) == sample_rate
+    assert np.max(np.abs(click[950:1100])) > 0.1
+    assert np.max(np.abs(click[2950:3100])) > 0.1
+    assert np.max(np.abs(click[:800])) == pytest.approx(0.0)
 
 
 def test_no_stale_branding_in_active_source_files() -> None:

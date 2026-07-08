@@ -428,6 +428,11 @@ def generate_pattern(
             "source_complete_bars": analysis.complete_bar_count,
             "generated_bars": bars,
             "bars_override": controls.bars,
+            "grid_start_seconds": analysis.grid_start_seconds,
+            "downbeat_seconds": analysis.downbeat_seconds,
+            "grid_start_source": analysis.grid_start_source,
+            "tempo_confidence": analysis.tempo_confidence,
+            "beat_confidence": analysis.beat_confidence,
             "source_activity_strategy": "cycle analyzed bar activity when generated bars exceed source bars",
             "controls": asdict(controls),
             "timing": {

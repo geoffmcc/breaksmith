@@ -27,6 +27,18 @@ Analyze an audio file:
 uv run breaksmith analyze path/to/loop.wav
 ```
 
+Render a timing diagnostic click track while analyzing:
+
+```bash
+uv run breaksmith analyze path/to/loop.wav --bpm 172 --render-click
+```
+
+This writes `analysis-click.wav` and `source-with-click.wav` next to the analysis JSON so you can hear whether the grid and bar starts line up with the source. Use `--grid-start` or `--downbeat-start` when the automatic start point needs manual correction:
+
+```bash
+uv run breaksmith analyze path/to/loop.wav --bpm 172 --grid-start 0.125 --render-click
+```
+
 Generate all styles:
 
 ```bash
@@ -50,6 +62,12 @@ Override a bad tempo estimate:
 
 ```bash
 uv run breaksmith generate path/to/loop.wav --bpm 172
+```
+
+Use the same manual grid start during generation:
+
+```bash
+uv run breaksmith generate path/to/loop.wav --bpm 172 --grid-start 0.125 --bars 8
 ```
 
 Choose an output directory:
@@ -79,6 +97,8 @@ Use `--style all` to generate every style, or select one style with `--style rol
 - `--variation`: random and bar-to-bar variation, `0.0` to `1.0`.
 - `--seed`: deterministic random seed.
 - `--bpm`: tempo override.
+- `--grid-start`: manual grid start in seconds.
+- `--downbeat-start`: manual first downbeat in seconds; overrides `--grid-start`.
 - `--steps-per-bar`: grid resolution; must be a positive multiple of four.
 
 The same audio analysis, style, controls, and seed should produce deterministic output.

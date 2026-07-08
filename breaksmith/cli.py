@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from .analysis import analyze_audio
+from .click import render_click_tracks
 from .exporters.json_export import write_analysis, write_pattern
 from .exporters.midi import write_midi
 from .exporters.strudel import write_strudel
@@ -17,6 +18,16 @@ def _positive_bpm(value: str) -> float:
     if bpm <= 0:
         raise argparse.ArgumentTypeError("BPM must be greater than zero")
     return bpm
+
+
+def _non_negative_float(name: str):
+    def parse(value: str) -> float:
+        parsed = float(value)
+        if parsed < 0:
+            raise argparse.ArgumentTypeError(f"{name} must be greater than or equal to zero")
+        return parsed
+
+    return parse
 
 
 def _bounded_float(name: str, minimum: float, maximum: float):
@@ -52,6 +63,15 @@ def _format_grid_fit(analysis: AudioAnalysis) -> str:
 
 def _print_loop_diagnostics(analysis: AudioAnalysis) -> None:
     print(f"Grid fit: {_format_grid_fit(analysis)}")
+    print(
+        "Timing confidence: "
+        f"tempo={analysis.tempo_confidence:.2f}, beat={analysis.beat_confidence:.2f} "
+        f"({analysis.detected_beat_count}/{analysis.expected_beat_count} beats)"
+    )
+    print(
+        f"Grid start: {analysis.grid_start_seconds:.3f}s "
+        f"({analysis.grid_start_source}); downbeat: {analysis.downbeat_seconds:.3f}s"
+    )
     for warning in analysis.loop_warnings:
         prefix = "Notice" if analysis.duration_fit == "small_tail" else "Warning"
         print(f"{prefix}: {warning}")
@@ -76,6 +96,21 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--output", type=Path, default=Path("analysis.json"))
     analyze_parser.add_argument("--bpm", type=_positive_bpm, help="Override tempo estimation")
     analyze_parser.add_argument("--steps-per-bar", type=int, default=16)
+    analyze_parser.add_argument(
+        "--grid-start",
+        type=_non_negative_float("grid-start"),
+        help="Manual grid start in seconds",
+    )
+    analyze_parser.add_argument(
+        "--downbeat-start",
+        type=_non_negative_float("downbeat-start"),
+        help="Manual first downbeat in seconds; overrides --grid-start when both are provided",
+    )
+    analyze_parser.add_argument(
+        "--render-click",
+        action="store_true",
+        help="Render analysis-click.wav and source-with-click.wav next to the analysis output",
+    )
 
     generate_parser = subparsers.add_parser(
         "generate",
@@ -96,6 +131,16 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument("--seed", type=int, default=42)
     generate_parser.add_argument("--bpm", type=_positive_bpm, help="Override tempo estimation")
     generate_parser.add_argument("--steps-per-bar", type=int, default=16)
+    generate_parser.add_argument(
+        "--grid-start",
+        type=_non_negative_float("grid-start"),
+        help="Manual grid start in seconds",
+    )
+    generate_parser.add_argument(
+        "--downbeat-start",
+        type=_non_negative_float("downbeat-start"),
+        help="Manual first downbeat in seconds; overrides --grid-start when both are provided",
+    )
     generate_parser.add_argument("--bars", type=_positive_int("bars"), help="Generated bar count")
     generate_parser.add_argument(
         "--density",
@@ -130,6 +175,8 @@ def _run_analyze(args: argparse.Namespace) -> int:
         args.audio,
         steps_per_bar=args.steps_per_bar,
         bpm_override=args.bpm,
+        grid_start_override=args.grid_start,
+        downbeat_override=args.downbeat_start,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     write_analysis(analysis, args.output)
@@ -139,6 +186,10 @@ def _run_analyze(args: argparse.Namespace) -> int:
     _print_loop_diagnostics(analysis)
     print(f"Detected output grid: {analysis.bar_count} bars")
     print(f"Wrote: {args.output}")
+    if args.render_click:
+        click_path, mixed_path = render_click_tracks(args.audio, analysis, args.output.parent)
+        print(f"Wrote click: {click_path}")
+        print(f"Wrote source with click: {mixed_path}")
     for warning in analysis.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
     return 0
@@ -150,6 +201,8 @@ def _run_generate(args: argparse.Namespace) -> int:
         args.audio,
         steps_per_bar=args.steps_per_bar,
         bpm_override=args.bpm,
+        grid_start_override=args.grid_start,
+        downbeat_override=args.downbeat_start,
     )
     analysis_path = output_dir / "analysis.json"
     write_analysis(analysis, analysis_path)
@@ -168,6 +221,15 @@ def _run_generate(args: argparse.Namespace) -> int:
     print(f"Detected BPM: {analysis.bpm:.2f}")
     print(f"Duration: {analysis.duration_seconds:.2f}s")
     print(f"Detected source fit: {_format_grid_fit(analysis)}")
+    print(
+        "Timing confidence: "
+        f"tempo={analysis.tempo_confidence:.2f}, beat={analysis.beat_confidence:.2f} "
+        f"({analysis.detected_beat_count}/{analysis.expected_beat_count} beats)"
+    )
+    print(
+        f"Grid start: {analysis.grid_start_seconds:.3f}s "
+        f"({analysis.grid_start_source}); downbeat: {analysis.downbeat_seconds:.3f}s"
+    )
     print(f"Grid: {analysis.bar_count} analyzed bars × {analysis.steps_per_bar} steps")
     if controls.bars is None:
         print(f"Generating {generation_bar_count} bars because --bars was not specified.")

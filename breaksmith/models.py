@@ -24,6 +24,12 @@ class AudioAnalysis:
     high_activity: list[float]
     bar_energy: list[float]
     grid_start_seconds: float = 0.0
+    downbeat_seconds: float = 0.0
+    grid_start_source: str = "detected"
+    tempo_confidence: float = 0.0
+    beat_confidence: float = 0.0
+    detected_beat_count: int = 0
+    expected_beat_count: int = 0
     effective_duration_seconds: float = 0.0
     beat_duration_seconds: float = 0.0
     bar_duration_seconds: float = 0.0

@@ -129,6 +129,8 @@ def analyze_audio(
     *,
     steps_per_bar: int = 16,
     bpm_override: float | None = None,
+    grid_start_override: float | None = None,
+    downbeat_override: float | None = None,
 ) -> AudioAnalysis:
     if not audio_path.exists():
         raise FileNotFoundError(f"Audio file does not exist: {audio_path}")
@@ -136,6 +138,10 @@ def analyze_audio(
         raise ValueError(f"Audio path is not a file: {audio_path}")
     if steps_per_bar <= 0 or steps_per_bar % 4 != 0:
         raise ValueError("steps_per_bar must be a positive multiple of four")
+    if grid_start_override is not None and grid_start_override < 0:
+        raise ValueError("grid_start must be greater than or equal to zero")
+    if downbeat_override is not None and downbeat_override < 0:
+        raise ValueError("downbeat_start must be greater than or equal to zero")
 
     try:
         y, sample_rate = librosa.load(audio_path, sr=None, mono=True)
@@ -150,6 +156,10 @@ def analyze_audio(
     duration = float(librosa.get_duration(y=y, sr=sample_rate))
     if duration < 1.0:
         raise ValueError("The audio file is too short; use at least one second")
+    if grid_start_override is not None and grid_start_override >= duration:
+        raise ValueError("grid_start must be earlier than the end of the audio")
+    if downbeat_override is not None and downbeat_override >= duration:
+        raise ValueError("downbeat_start must be earlier than the end of the audio")
 
     hop_length = 512
     onset_envelope = librosa.onset.onset_strength(
@@ -187,20 +197,39 @@ def analyze_audio(
     ).astype(float)
 
     beat_duration = 60.0 / bpm
-    if beat_times_detected.size >= 2:
+    grid_start_source = "detected"
+    if downbeat_override is not None:
+        first_beat = float(downbeat_override)
+        grid_start_source = "manual_downbeat"
+        warnings.append(f"Manual downbeat start override applied at {first_beat:.3f}s.")
+    elif grid_start_override is not None:
+        first_beat = float(grid_start_override)
+        grid_start_source = "manual_grid_start"
+        warnings.append(f"Manual grid start override applied at {first_beat:.3f}s.")
+    elif beat_times_detected.size >= 2:
         first_beat = float(beat_times_detected[0])
     else:
         first_beat = 0.0
+        grid_start_source = "audio_start"
         warnings.append("Few reliable beats were found; the grid begins at the audio start.")
 
     # Include the beginning when the first tracked beat is implausibly late.
-    if first_beat > beat_duration * 1.5:
+    if grid_start_source == "detected" and first_beat > beat_duration * 1.5:
         first_beat = 0.0
+        grid_start_source = "audio_start"
         warnings.append("Tracked downbeat was late; the grid was anchored to 0 seconds.")
 
     beats_per_bar = 4
     step_duration = beat_duration * beats_per_bar / steps_per_bar
     usable_duration = max(0.0, duration - first_beat)
+    detected_beat_count = int(beat_times_detected.size)
+    expected_beat_count = max(1, round(usable_duration / beat_duration))
+    beat_confidence = min(1.0, detected_beat_count / expected_beat_count)
+    tempo_confidence = 1.0 if bpm_override is not None else beat_confidence
+    if beat_confidence < 0.35:
+        warnings.append(
+            f"Beat confidence is low ({beat_confidence:.2f}); verify the grid with a click render."
+        )
     loop_fit = calculate_loop_fit(
         duration_seconds=duration,
         bpm=bpm,
@@ -263,6 +292,12 @@ def analyze_audio(
         high_activity=[round(float(value), 6) for value in high_steps],
         bar_energy=[round(float(value), 6) for value in bar_energy],
         grid_start_seconds=float(loop_fit["grid_start_seconds"]),
+        downbeat_seconds=float(loop_fit["grid_start_seconds"]),
+        grid_start_source=grid_start_source,
+        tempo_confidence=round(float(tempo_confidence), 6),
+        beat_confidence=round(float(beat_confidence), 6),
+        detected_beat_count=detected_beat_count,
+        expected_beat_count=expected_beat_count,
         effective_duration_seconds=float(loop_fit["effective_duration_seconds"]),
         beat_duration_seconds=float(loop_fit["beat_duration_seconds"]),
         bar_duration_seconds=float(loop_fit["bar_duration_seconds"]),

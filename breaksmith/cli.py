@@ -167,6 +167,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Music genre (inferred from style if omitted)",
     )
     generate_parser.add_argument("--seed", type=int, default=42)
+    generate_parser.add_argument(
+        "--variants",
+        type=_positive_int("variants"),
+        default=1,
+        help="Number of variant patterns to generate (each gets seed + variant index)",
+    )
     generate_parser.add_argument("--bpm", type=_positive_bpm, help="Override tempo estimation")
     generate_parser.add_argument("--steps-per-bar", type=int, default=16)
     generate_parser.add_argument(
@@ -388,18 +394,24 @@ def _run_generate(args: argparse.Namespace) -> int:
     )
 
     for style in styles:
-        pattern = generate_pattern(
-            analysis, style, seed=args.seed, controls=controls, arrangement=arrangement
-        )
-        style_dir = ensure_output_dir(output_dir / style)
-        write_pattern(pattern, style_dir / "pattern.json")
-        write_midi(pattern, style_dir / "pattern.mid", velocity_curve=args.midi_velocity_curve)
-        write_strudel(pattern, style_dir / "pattern.strudel.js")
-        hit_count = sum(len(value) for value in pattern.hits.values())
-        print(f"Generated {style}: {hit_count} hits → {style_dir}")
-        if args.preview:
-            preview_path = write_preview(pattern, style_dir / "pattern-preview.wav", seed=args.seed)
-            print(f"  Preview: {preview_path}")
+        for variant in range(args.variants):
+            variant_seed = args.seed + variant
+            pattern = generate_pattern(
+                analysis, style, seed=variant_seed, controls=controls, arrangement=arrangement
+            )
+            if args.variants > 1:
+                style_dir = ensure_output_dir(output_dir / style / f"variant_{variant}")
+            else:
+                style_dir = ensure_output_dir(output_dir / style)
+            write_pattern(pattern, style_dir / "pattern.json")
+            write_midi(pattern, style_dir / "pattern.mid", velocity_curve=args.midi_velocity_curve)
+            write_strudel(pattern, style_dir / "pattern.strudel.js")
+            hit_count = sum(len(value) for value in pattern.hits.values())
+            label = f"{style} variant {variant}" if args.variants > 1 else style
+            print(f"Generated {label}: {hit_count} hits → {style_dir}")
+            if args.preview:
+                preview_path = write_preview(pattern, style_dir / "pattern-preview.wav", seed=variant_seed)
+                print(f"  Preview: {preview_path}")
 
     if arrangement is not None:
         print(f"Generated {generation_bar_count} bars ({args.structure} arrangement).")

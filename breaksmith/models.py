@@ -64,12 +64,14 @@ GENRE_CONTROL_DEFAULTS: dict[str, dict[str, float]] = {
         "swing": 0.0,
         "humanize": 0.0,
         "variation": 0.25,
+        "source_restraint": 0.0,
     },
     "hiphop": {
         "density": 0.35,
         "swing": 0.12,
         "humanize": 0.15,
         "variation": 0.30,
+        "source_restraint": 0.3,
     },
 }
 

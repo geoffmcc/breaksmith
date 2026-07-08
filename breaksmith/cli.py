@@ -215,6 +215,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Render a WAV audio preview of each generated pattern",
     )
     generate_parser.add_argument(
+        "--source-restraint",
+        type=_bounded_float("source-restraint", 0.0, 1.0),
+        default=None,
+        help="Modulate density by source bar energy from 0.0 to 1.0 (0=ignore source, 1=fully follow source)",
+    )
+    generate_parser.add_argument(
         "--kick-density",
         type=_bounded_float("kick-density", 0.0, 1.0),
         default=None,
@@ -318,6 +324,7 @@ def _run_generate(args: argparse.Namespace) -> int:
         swing=args.swing if args.swing is not None else genre_defaults.get("swing", 0.0),
         humanize=args.humanize if args.humanize is not None else genre_defaults.get("humanize", 0.0),
         variation=args.variation if args.variation is not None else genre_defaults.get("variation", 0.25),
+        source_restraint=args.source_restraint if args.source_restraint is not None else genre_defaults.get("source_restraint", 0.0),
         bars=effective_bars,
         genre=genre,
         kick_density=args.kick_density,

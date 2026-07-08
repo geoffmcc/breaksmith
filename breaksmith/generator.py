@@ -190,6 +190,7 @@ def _add_hit(
 ) -> None:
     velocity = _humanized_velocity(velocity, controls.humanize, rng)
     timing_offset = _timing_offset(step, controls, preset.swing_amount, rng)
+    timing_offset = max(-0.49, min(0.49 - step % 1, timing_offset))
     for existing in hits[instrument]:
         if existing.bar == bar and existing.step == step:
             existing.velocity = max(existing.velocity, velocity)
@@ -241,20 +242,22 @@ def generate_pattern(
     density_scale = 0.45 + controls.density * 1.15
     ldm = _layer_density_multipliers(controls)
     variation_scale = controls.variation
+    restraint = controls.source_restraint
 
     for bar in range(bars):
         section = bar_sections.get(bar)
         offset = (bar % max(1, analysis.bar_count)) * steps
         energy = _activity(analysis.bar_energy, bar)
+        bar_scale = 1.0 + restraint * (energy - 1.0)
 
-        eff_kick_density = _section_scaled(preset.kick_density, section, "kick_scale")
-        eff_hat_density = _section_scaled(preset.hat_density, section, "hat_scale")
-        eff_ghost_prob = _section_scaled(preset.ghost_probability, section, "ghost_scale")
-        eff_fill_density = _section_scaled(preset.fill_density, section, "fill_scale")
-        eff_open_hat_prob = _section_scaled(preset.open_hat_probability, section, "open_hat_scale")
+        eff_kick_density = _section_scaled(preset.kick_density, section, "kick_scale") * bar_scale
+        eff_hat_density = _section_scaled(preset.hat_density, section, "hat_scale") * bar_scale
+        eff_ghost_prob = _section_scaled(preset.ghost_probability, section, "ghost_scale") * bar_scale
+        eff_fill_density = _section_scaled(preset.fill_density, section, "fill_scale") * bar_scale
+        eff_open_hat_prob = _section_scaled(preset.open_hat_probability, section, "open_hat_scale") * bar_scale
         eff_percussion_density = _section_scaled(
             preset.percussion_density, section, "percussion_scale"
-        )
+        ) * bar_scale
         eff_syncopation = _section_scaled(preset.syncopation, section, "syncopation_scale")
         eff_breakbeat_bias = _section_scaled(preset.breakbeat_bias, section, "breakbeat_bias_scale")
         eff_mechanical_bias = _section_scaled(

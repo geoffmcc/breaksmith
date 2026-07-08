@@ -85,9 +85,11 @@ def write_midi(
 
         length_fraction = NOTE_LENGTH_FRACTIONS.get(instrument, 0.5)
         events: list[tuple[int, Message]] = []
+        max_start_tick = pattern.bars * pattern.steps_per_bar * ticks_per_step - 1
         for hit in pattern.hits.get(instrument, []):
             absolute_step = hit.bar * pattern.steps_per_bar + hit.step
-            start = max(0, round((absolute_step + hit.timing_offset_steps) * ticks_per_step))
+            raw = round((absolute_step + hit.timing_offset_steps) * ticks_per_step)
+            start = max(0, min(max_start_tick, raw))
             vel = _apply_velocity_curve(hit.velocity, velocity_curve)
             length = max(1, round(length_fraction * ticks_per_step))
             release = max(0, min(63, vel // 2 - 1))
@@ -105,7 +107,7 @@ def write_midi(
             )
             events.append(
                 (
-                    start + length,
+                    min(start + length, max_start_tick),
                     Message(
                         "note_off",
                         channel=9,

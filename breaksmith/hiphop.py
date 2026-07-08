@@ -235,22 +235,24 @@ def generate_hiphop_pattern(
     variation_scale = controls.variation
     humanize = controls.humanize
     swing = min(0.5, controls.swing + preset.swing_amount)
+    restraint = controls.source_restraint
 
     for bar in range(bars):
         section = bar_sections.get(bar)
         offset = (bar % max(1, analysis.bar_count)) * steps
         energy = _activity(analysis.bar_energy, bar)
+        bar_scale = 1.0 + restraint * (energy - 1.0)
 
-        eff_kick_density = _section_scaled(preset.kick_density, section, "kick_scale")
-        eff_hat_density = _section_scaled(preset.hat_density, section, "hat_scale")
-        eff_ghost_prob = _section_scaled(preset.ghost_probability, section, "ghost_scale")
-        eff_fill_density = _section_scaled(preset.fill_density, section, "fill_scale")
+        eff_kick_density = _section_scaled(preset.kick_density, section, "kick_scale") * bar_scale
+        eff_hat_density = _section_scaled(preset.hat_density, section, "hat_scale") * bar_scale
+        eff_ghost_prob = _section_scaled(preset.ghost_probability, section, "ghost_scale") * bar_scale
+        eff_fill_density = _section_scaled(preset.fill_density, section, "fill_scale") * bar_scale
         eff_open_hat_prob = _section_scaled(
             preset.open_hat_probability, section, "open_hat_scale"
-        )
+        ) * bar_scale
         eff_percussion_density = _section_scaled(
             preset.percussion_density, section, "percussion_scale"
-        )
+        ) * bar_scale
 
         for fraction in (0.25, 0.75):
             step = _step_from_fraction(steps, fraction)

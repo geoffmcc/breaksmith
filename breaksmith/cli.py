@@ -10,7 +10,13 @@ from .exporters.json_export import write_analysis, write_feature_csv, write_patt
 from .exporters.midi import write_midi
 from .exporters.strudel import write_strudel
 from .generator import STYLE_CONFIG, GenerationControls, generate_pattern
-from .models import AudioAnalysis, ensure_output_dir
+from .models import (
+    ARRANGEMENT_PRESETS,
+    AudioAnalysis,
+    Section,
+    arrangement_bar_count,
+    ensure_output_dir,
+)
 from .synth import write_preview
 
 
@@ -163,6 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument("--bars", type=_positive_int("bars"), help="Generated bar count")
     generate_parser.add_argument(
+        "--structure",
+        choices=[*ARRANGEMENT_PRESETS],
+        help="Phrase arrangement preset (overrides --bars with the preset's total bar count)",
+    )
+    generate_parser.add_argument(
         "--density",
         type=_bounded_float("density", 0.0, 1.0),
         default=0.5,
@@ -237,16 +248,27 @@ def _run_generate(args: argparse.Namespace) -> int:
     analysis_path = output_dir / "analysis.json"
     write_analysis(analysis, analysis_path)
 
+    arrangement: tuple[Section, ...] | None = None
+    bars_explicit = args.bars is not None
+    if args.structure:
+        if args.bars is not None:
+            print("Warning: --structure overrides --bars; ignoring --bars.", file=sys.stderr)
+        arrangement = ARRANGEMENT_PRESETS[args.structure]
+        effective_bars = arrangement_bar_count(arrangement)
+        bars_explicit = True
+    else:
+        effective_bars = args.bars or analysis.bar_count
+
     controls = GenerationControls(
         density=args.density,
         swing=args.swing,
         humanize=args.humanize,
         variation=args.variation,
-        bars=args.bars,
+        bars=effective_bars,
     )
     controls.validate()
+    generation_bar_count = effective_bars
     styles = list(STYLE_CONFIG) if args.style == "all" else [args.style]
-    generation_bar_count = controls.bars or analysis.bar_count
     print(f"Source: {args.audio}")
     print(f"Detected BPM: {analysis.bpm:.2f}")
     print(f"Duration: {analysis.duration_seconds:.2f}s")
@@ -261,7 +283,10 @@ def _run_generate(args: argparse.Namespace) -> int:
         f"({analysis.grid_start_source}); downbeat: {analysis.downbeat_seconds:.3f}s"
     )
     print(f"Grid: {analysis.bar_count} analyzed bars × {analysis.steps_per_bar} steps")
-    if controls.bars is None:
+    if arrangement is not None:
+        sections_desc = " → ".join(f"{s.name}({s.bar_count}b)" for s in arrangement)
+        print(f"Arrangement: {sections_desc} ({generation_bar_count} total bars)")
+    elif not bars_explicit:
         print(f"Generating {generation_bar_count} bars because --bars was not specified.")
         if analysis.duration_fit in {"small_tail", "extra_beat"}:
             print(
@@ -290,7 +315,9 @@ def _run_generate(args: argparse.Namespace) -> int:
     )
 
     for style in styles:
-        pattern = generate_pattern(analysis, style, seed=args.seed, controls=controls)
+        pattern = generate_pattern(
+            analysis, style, seed=args.seed, controls=controls, arrangement=arrangement
+        )
         style_dir = ensure_output_dir(output_dir / style)
         write_pattern(pattern, style_dir / "pattern.json")
         write_midi(pattern, style_dir / "pattern.mid")
@@ -301,8 +328,10 @@ def _run_generate(args: argparse.Namespace) -> int:
             preview_path = write_preview(pattern, style_dir / "pattern-preview.wav", seed=args.seed)
             print(f"  Preview: {preview_path}")
 
-    if controls.bars is not None:
-        print(f"Generated exactly {controls.bars} bars.")
+    if arrangement is not None:
+        print(f"Generated {generation_bar_count} bars ({args.structure} arrangement).")
+    elif bars_explicit:
+        print(f"Generated exactly {generation_bar_count} bars.")
 
     for warning in analysis.warnings:
         print(f"Warning: {warning}", file=sys.stderr)

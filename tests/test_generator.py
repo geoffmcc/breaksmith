@@ -20,7 +20,12 @@ from breaksmith.exporters.json_export import write_pattern
 from breaksmith.exporters.midi import write_midi
 from breaksmith.exporters.strudel import write_strudel
 from breaksmith.generator import STYLE_PRESETS, GenerationControls, generate_pattern
-from breaksmith.models import AudioAnalysis
+from breaksmith.models import (
+    ARRANGEMENT_PRESETS,
+    SHORT_ARRANGEMENT,
+    AudioAnalysis,
+    arrangement_bar_count,
+)
 from breaksmith.synth import (
     INSTRUMENT_DURATIONS,
     INSTRUMENT_RENDERERS,
@@ -575,6 +580,7 @@ def test_generate_output_suggests_bars_for_extra_beat_source(
         grid_start=None,
         downbeat_start=None,
         preview=False,
+        structure=None,
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -601,6 +607,7 @@ def test_generate_output_reports_exact_requested_bars(monkeypatch, capsys, tmp_p
         grid_start=None,
         downbeat_start=None,
         preview=False,
+        structure=None,
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -706,6 +713,7 @@ def test_generate_with_preview_writes_wav(monkeypatch, tmp_path: Path) -> None:
         grid_start=None,
         downbeat_start=None,
         preview=True,
+        structure=None,
     )
     assert cli._run_generate(args) == 0
     preview = tmp_path / "output" / "rolling" / "pattern-preview.wav"
@@ -736,10 +744,115 @@ def test_generate_preview_matches_render_preview(monkeypatch, tmp_path: Path) ->
         grid_start=None,
         downbeat_start=None,
         preview=True,
+        structure=None,
     )
     assert cli._run_generate(args) == 0
     preview_path = tmp_path / "output" / "rolling" / "pattern-preview.wav"
     assert preview_path.exists()
+
+
+def test_arrangement_presets_have_correct_bar_totals() -> None:
+    assert arrangement_bar_count(SHORT_ARRANGEMENT) == 56
+    assert arrangement_bar_count(ARRANGEMENT_PRESETS["build-drop"]) == 52
+    assert arrangement_bar_count(ARRANGEMENT_PRESETS["minimal"]) == 20
+
+
+def test_arrangement_overrides_bars_in_pattern() -> None:
+    pattern = generate_pattern(fake_analysis(), "rolling", seed=42, arrangement=SHORT_ARRANGEMENT)
+    assert pattern.bars == 56
+    assert pattern.metadata["arrangement"] is not None
+    assert pattern.metadata["arrangement"]["sections"][0]["name"] == "intro"
+
+
+def test_arrangement_with_controls_bars_is_ignored_by_generator() -> None:
+    pattern = generate_pattern(
+        fake_analysis(),
+        "aggressive",
+        seed=42,
+        controls=GenerationControls(bars=16),
+        arrangement=SHORT_ARRANGEMENT,
+    )
+    assert pattern.bars == 56
+
+
+def test_intro_section_has_fewer_hits_than_drop() -> None:
+    pattern = generate_pattern(fake_analysis(), "rolling", seed=42, arrangement=SHORT_ARRANGEMENT)
+    intro_hits = sum(1 for hits in pattern.hits.values() for hit in hits if hit.bar < 4)
+    drop_start = 4 + 8  # intro(4) + buildup(8)
+    drop_end = drop_start + 16
+    drop_hits = sum(
+        1 for hits in pattern.hits.values() for hit in hits if drop_start <= hit.bar < drop_end
+    )
+    assert intro_hits < drop_hits
+
+
+def test_outro_has_reduced_density_compared_to_full_arrangement() -> None:
+    pattern = generate_pattern(fake_analysis(), "jungle", seed=42, arrangement=SHORT_ARRANGEMENT)
+    intro_bar_hits = sum(1 for hits in pattern.hits.values() for hit in hits if hit.bar == 0)
+    drop_bar_hits = sum(1 for hits in pattern.hits.values() for hit in hits if hit.bar == 12)
+    outro_bar_hits = sum(1 for hits in pattern.hits.values() for hit in hits if hit.bar == 54)
+    assert drop_bar_hits > intro_bar_hits
+    assert drop_bar_hits > outro_bar_hits
+
+
+def test_generate_with_structure_cli_flag(monkeypatch, capsys, tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.source = str(tmp_path / "source.wav")
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    source = tmp_path / "source.wav"
+    sf.write(source, np.zeros(4000, dtype=np.float32), 4000)
+    args = SimpleNamespace(
+        audio=source,
+        output=tmp_path / "output",
+        bpm=172.0,
+        steps_per_bar=16,
+        style="rolling",
+        seed=42,
+        bars=None,
+        density=0.5,
+        swing=0.0,
+        humanize=0.0,
+        variation=0.25,
+        grid_start=None,
+        downbeat_start=None,
+        preview=False,
+        structure="short",
+    )
+    assert cli._run_generate(args) == 0
+    output = capsys.readouterr().out
+    assert "intro(4b) → buildup(8b) → drop(16b) → breakdown(4b) → drop(16b) → outro(8b)" in output
+    assert "56 total bars" in output
+    assert "short arrangement" in output
+
+
+def test_generate_with_structure_overrides_bars(monkeypatch, capsys, tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.source = str(tmp_path / "source.wav")
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    source = tmp_path / "source.wav"
+    sf.write(source, np.zeros(4000, dtype=np.float32), 4000)
+    args = SimpleNamespace(
+        audio=source,
+        output=tmp_path / "output",
+        bpm=172.0,
+        steps_per_bar=16,
+        style="rolling",
+        seed=42,
+        bars=8,
+        density=0.5,
+        swing=0.0,
+        humanize=0.0,
+        variation=0.25,
+        grid_start=None,
+        downbeat_start=None,
+        preview=False,
+        structure="minimal",
+    )
+    assert cli._run_generate(args) == 0
+    captured = capsys.readouterr()
+    assert "Warning: --structure overrides --bars" in captured.err
+    assert "drop(16b) → outro(4b)" in captured.out
+    assert "20 total bars" in captured.out
 
 
 def test_no_stale_branding_in_active_source_files() -> None:

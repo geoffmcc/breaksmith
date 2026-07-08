@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
+from typing import Any
 
-from .models import INSTRUMENTS, AudioAnalysis, DrumPattern, Hit
+from .models import (
+    INSTRUMENTS,
+    AudioAnalysis,
+    DrumPattern,
+    Hit,
+    Section,
+    arrangement_bar_count,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,12 +233,34 @@ def _add_hit(
     )
 
 
+def _build_bar_sections(
+    bars: int, arrangement: Sequence[Section] | None
+) -> dict[int, Section | None]:
+    if arrangement is None:
+        return {}
+    bar_to_section: dict[int, Section | None] = {}
+    bar_index = 0
+    for section in arrangement:
+        for _ in range(section.bar_count):
+            if bar_index < bars:
+                bar_to_section[bar_index] = section
+            bar_index += 1
+    return bar_to_section
+
+
+def _section_scaled(value: float, section: Section | None, attr: str) -> float:
+    if section is None:
+        return value
+    return value * getattr(section, attr, 1.0)
+
+
 def generate_pattern(
     analysis: AudioAnalysis,
     style: str,
     *,
     seed: int,
     controls: GenerationControls | None = None,
+    arrangement: Sequence[Section] | None = None,
 ) -> DrumPattern:
     if style not in STYLE_PRESETS:
         raise ValueError(f"Unknown style: {style}")
@@ -239,14 +270,36 @@ def generate_pattern(
     preset = STYLE_PRESETS[style]
     rng = random.Random(f"{seed}:{style}:{asdict(controls)}")
     steps = analysis.steps_per_bar
-    bars = controls.bars or analysis.bar_count
+    bars = (
+        arrangement_bar_count(arrangement)
+        if arrangement is not None
+        else (controls.bars or analysis.bar_count)
+    )
+
+    bar_sections = _build_bar_sections(bars, arrangement)
+
     hits: dict[str, list[Hit]] = {instrument: [] for instrument in INSTRUMENTS}
     density_scale = 0.45 + controls.density * 1.15
     variation_scale = controls.variation
 
     for bar in range(bars):
+        section = bar_sections.get(bar)
         offset = (bar % max(1, analysis.bar_count)) * steps
         energy = _activity(analysis.bar_energy, bar)
+
+        eff_kick_density = _section_scaled(preset.kick_density, section, "kick_scale")
+        eff_hat_density = _section_scaled(preset.hat_density, section, "hat_scale")
+        eff_ghost_prob = _section_scaled(preset.ghost_probability, section, "ghost_scale")
+        eff_fill_density = _section_scaled(preset.fill_density, section, "fill_scale")
+        eff_open_hat_prob = _section_scaled(preset.open_hat_probability, section, "open_hat_scale")
+        eff_percussion_density = _section_scaled(
+            preset.percussion_density, section, "percussion_scale"
+        )
+        eff_syncopation = _section_scaled(preset.syncopation, section, "syncopation_scale")
+        eff_breakbeat_bias = _section_scaled(preset.breakbeat_bias, section, "breakbeat_bias_scale")
+        eff_mechanical_bias = _section_scaled(
+            preset.mechanical_bias, section, "mechanical_bias_scale"
+        )
 
         for fraction in preset.required_snare_steps:
             step = _step_from_fraction(steps, fraction)
@@ -289,27 +342,27 @@ def generate_pattern(
                 + _activity(analysis.onset_activity, index) * 0.38
             )
             syncopation = 0.18 if step % 4 in {1, 2, 3} else 0.0
-            breakbeat = preset.breakbeat_bias * (0.16 if step in {2, 5, 7, 10, 14, 15} else 0.0)
-            mechanical = preset.mechanical_bias * (0.14 if step in {3, 6, 9, 11, 14} else -0.04)
+            breakbeat = eff_breakbeat_bias * (0.16 if step in {2, 5, 7, 10, 14, 15} else 0.0)
+            mechanical = eff_mechanical_bias * (0.14 if step in {3, 6, 9, 11, 14} else -0.04)
             randomness = rng.uniform(-0.18, 0.18) * variation_scale
             score = (
                 activity_score * preset.activity_response
-                + syncopation * preset.syncopation
+                + syncopation * eff_syncopation
                 + breakbeat
                 + mechanical
                 + randomness
             )
             kick_candidates.append((score, step))
 
-        desired_extra = max(0, round(preset.kick_density * density_scale * 4))
+        desired_extra = max(0, round(eff_kick_density * density_scale * 4))
         if preset.half_time:
             desired_extra = min(desired_extra, 1)
         selected = 0
-        threshold = 0.54 - preset.syncopation * 0.16 - controls.density * 0.10
+        threshold = 0.54 - eff_syncopation * 0.16 - controls.density * 0.10
         for score, step in sorted(kick_candidates, reverse=True):
             if selected >= desired_extra:
                 break
-            chance = 0.12 + preset.syncopation * 0.22 + controls.density * 0.20
+            chance = 0.12 + eff_syncopation * 0.22 + controls.density * 0.20
             if score >= threshold or rng.random() < chance * variation_scale:
                 if all(abs(step - hit.step) > 1 for hit in hits["kick"] if hit.bar == bar):
                     _add_hit(
@@ -328,13 +381,13 @@ def generate_pattern(
             index = offset + step
             accent = step % 4 == 0
             probability = (
-                preset.hat_density * density_scale
+                eff_hat_density * density_scale
                 + energy * 0.18
                 + _activity(analysis.high_activity, index) * 0.15
             )
             if preset.half_time and step % 4 not in {0, 2}:
                 probability *= 0.45
-            if preset.mechanical_bias and step % 2 == 1:
+            if eff_mechanical_bias and step % 2 == 1:
                 probability *= 0.58
             if accent or rng.random() < min(0.96, probability):
                 base_activity = max(
@@ -352,7 +405,7 @@ def generate_pattern(
                 )
 
         for step in (steps // 2 - 1, steps - 1):
-            chance = preset.open_hat_probability * density_scale + energy * 0.20
+            chance = eff_open_hat_prob * density_scale + energy * 0.20
             if rng.random() < min(0.85, chance):
                 _add_hit(
                     hits,
@@ -366,12 +419,12 @@ def generate_pattern(
                 )
 
         ghost_steps = {steps // 4 - 2, steps // 2 + 2, 3 * steps // 4 - 2, steps - 2}
-        if preset.breakbeat_bias:
+        if eff_breakbeat_bias:
             ghost_steps.update({steps // 4 + 2, steps // 2 - 1, steps - 3})
         for step in sorted(step % steps for step in ghost_steps):
             index = offset + step
             emptiness = 1.0 - _activity(analysis.onset_activity, index)
-            chance = preset.ghost_probability * density_scale * (0.45 + emptiness)
+            chance = eff_ghost_prob * density_scale * (0.45 + emptiness)
             if rng.random() < min(0.90, chance):
                 _add_hit(
                     hits,
@@ -385,10 +438,10 @@ def generate_pattern(
                 )
 
         percussion_steps = {steps // 2 - 2, steps // 2 + 1, steps - 3}
-        if preset.breakbeat_bias:
+        if eff_breakbeat_bias:
             percussion_steps.update({1, 3, 6, 11, 15})
         for step in sorted(step % steps for step in percussion_steps):
-            chance = preset.percussion_density * density_scale + preset.breakbeat_bias * 0.10
+            chance = eff_percussion_density * density_scale + eff_breakbeat_bias * 0.10
             if rng.random() < min(0.85, chance * (0.55 + variation_scale)):
                 _add_hit(
                     hits,
@@ -405,11 +458,15 @@ def generate_pattern(
                 )
 
         is_phrase_end = (bar + 1) % 4 == 0 or bar == bars - 1
+        if arrangement and section is not None:
+            next_bar_section = bar_sections.get(bar + 1)
+            if next_bar_section is not None and next_bar_section is not section:
+                is_phrase_end = True
         if is_phrase_end:
             fill_start = 3 * steps // 4
             for step in range(fill_start, steps):
                 normalized = (step - fill_start) / max(1, steps - fill_start - 1)
-                chance = preset.fill_density * density_scale * (0.35 + normalized * 0.70)
+                chance = eff_fill_density * density_scale * (0.35 + normalized * 0.70)
                 if rng.random() < min(0.96, chance):
                     instrument = "snare" if step % 2 == 0 else "percussion"
                     _add_hit(
@@ -425,6 +482,12 @@ def generate_pattern(
 
     for instrument_hits in hits.values():
         instrument_hits.sort(key=lambda hit: (hit.bar, hit.step, hit.timing_offset_steps))
+
+    arrangement_meta: dict[str, Any] | None = None
+    if arrangement is not None:
+        arrangement_meta = {
+            "sections": [{"name": s.name, "bar_count": s.bar_count} for s in arrangement],
+        }
 
     return DrumPattern(
         name=style,
@@ -442,6 +505,7 @@ def generate_pattern(
             "source_complete_bars": analysis.complete_bar_count,
             "generated_bars": bars,
             "bars_override": controls.bars,
+            "arrangement": arrangement_meta,
             "grid_start_seconds": analysis.grid_start_seconds,
             "downbeat_seconds": analysis.downbeat_seconds,
             "grid_start_source": analysis.grid_start_source,

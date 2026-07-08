@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -105,6 +106,190 @@ class DrumPattern:
                 for instrument, instrument_hits in self.hits.items()
             },
         }
+
+
+@dataclass(frozen=True, slots=True)
+class Section:
+    name: str
+    bar_count: int
+    density_scale: float = 1.0
+    hat_scale: float = 1.0
+    fill_scale: float = 1.0
+    ghost_scale: float = 1.0
+    open_hat_scale: float = 1.0
+    percussion_scale: float = 1.0
+    kick_scale: float = 1.0
+    snare_scale: float = 1.0
+    breakbeat_bias_scale: float = 1.0
+    mechanical_bias_scale: float = 1.0
+    syncopation_scale: float = 1.0
+
+
+SHORT_ARRANGEMENT: tuple[Section, ...] = (
+    Section(
+        "intro",
+        4,
+        density_scale=0.25,
+        hat_scale=0.20,
+        fill_scale=0.0,
+        ghost_scale=0.0,
+        open_hat_scale=0.0,
+        percussion_scale=0.0,
+        syncopation_scale=0.3,
+        breakbeat_bias_scale=0.0,
+        mechanical_bias_scale=0.0,
+    ),
+    Section(
+        "buildup",
+        8,
+        density_scale=0.60,
+        hat_scale=0.55,
+        fill_scale=0.30,
+        ghost_scale=0.40,
+        open_hat_scale=0.40,
+        percussion_scale=0.30,
+        syncopation_scale=0.65,
+    ),
+    Section(
+        "drop",
+        16,
+        density_scale=1.0,
+        hat_scale=1.0,
+        fill_scale=1.0,
+        ghost_scale=1.0,
+        open_hat_scale=1.0,
+        percussion_scale=1.0,
+        kick_scale=1.0,
+        snare_scale=1.0,
+        breakbeat_bias_scale=1.0,
+        mechanical_bias_scale=1.0,
+        syncopation_scale=1.0,
+    ),
+    Section(
+        "breakdown",
+        4,
+        density_scale=0.35,
+        hat_scale=0.25,
+        fill_scale=0.05,
+        ghost_scale=0.10,
+        open_hat_scale=0.0,
+        percussion_scale=0.05,
+        syncopation_scale=0.35,
+        breakbeat_bias_scale=0.2,
+        mechanical_bias_scale=0.0,
+    ),
+    Section(
+        "drop",
+        16,
+        density_scale=1.0,
+        hat_scale=1.0,
+        fill_scale=1.0,
+        ghost_scale=1.0,
+        open_hat_scale=1.0,
+        percussion_scale=1.0,
+        kick_scale=1.0,
+        snare_scale=1.0,
+        breakbeat_bias_scale=1.0,
+        mechanical_bias_scale=1.0,
+        syncopation_scale=1.0,
+    ),
+    Section(
+        "outro",
+        8,
+        density_scale=0.20,
+        hat_scale=0.15,
+        fill_scale=0.0,
+        ghost_scale=0.0,
+        open_hat_scale=0.0,
+        percussion_scale=0.0,
+        syncopation_scale=0.25,
+        breakbeat_bias_scale=0.0,
+        mechanical_bias_scale=0.0,
+    ),
+)
+
+BUILD_DROP_ARRANGEMENT: tuple[Section, ...] = (
+    Section(
+        "buildup",
+        16,
+        density_scale=0.50,
+        hat_scale=0.45,
+        fill_scale=0.25,
+        ghost_scale=0.30,
+        open_hat_scale=0.30,
+        percussion_scale=0.20,
+        syncopation_scale=0.55,
+    ),
+    Section(
+        "drop",
+        32,
+        density_scale=1.0,
+        hat_scale=1.0,
+        fill_scale=1.0,
+        ghost_scale=1.0,
+        open_hat_scale=1.0,
+        percussion_scale=1.0,
+        kick_scale=1.0,
+        snare_scale=1.0,
+        breakbeat_bias_scale=1.0,
+        mechanical_bias_scale=1.0,
+        syncopation_scale=1.0,
+    ),
+    Section(
+        "outro",
+        4,
+        density_scale=0.20,
+        hat_scale=0.15,
+        fill_scale=0.0,
+        ghost_scale=0.0,
+        open_hat_scale=0.0,
+        percussion_scale=0.0,
+        syncopation_scale=0.25,
+        breakbeat_bias_scale=0.0,
+        mechanical_bias_scale=0.0,
+    ),
+)
+
+MINIMAL_ARRANGEMENT: tuple[Section, ...] = (
+    Section(
+        "drop",
+        16,
+        density_scale=1.0,
+        hat_scale=1.0,
+        fill_scale=1.0,
+        ghost_scale=1.0,
+        open_hat_scale=1.0,
+        percussion_scale=1.0,
+        kick_scale=1.0,
+        snare_scale=1.0,
+        breakbeat_bias_scale=1.0,
+        mechanical_bias_scale=1.0,
+        syncopation_scale=1.0,
+    ),
+    Section(
+        "outro",
+        4,
+        density_scale=0.15,
+        hat_scale=0.10,
+        fill_scale=0.0,
+        ghost_scale=0.0,
+        open_hat_scale=0.0,
+        percussion_scale=0.0,
+        syncopation_scale=0.20,
+        breakbeat_bias_scale=0.0,
+        mechanical_bias_scale=0.0,
+    ),
+)
+
+ARRANGEMENT_PRESETS: dict[str, tuple[Section, ...]] = {
+    "short": SHORT_ARRANGEMENT,
+    "build-drop": BUILD_DROP_ARRANGEMENT,
+    "minimal": MINIMAL_ARRANGEMENT,
+}
+
+
+def arrangement_bar_count(arrangement: Sequence[Section]) -> int:
+    return sum(section.bar_count for section in arrangement)
 
 
 def ensure_output_dir(path: Path) -> Path:

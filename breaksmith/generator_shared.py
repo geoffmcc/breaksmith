@@ -15,6 +15,11 @@ class GenerationControls:
     variation: float = 0.25
     bars: int | None = None
     genre: str | None = None
+    kick_density: float | None = None
+    snare_density: float | None = None
+    hat_density: float | None = None
+    open_hat_density: float | None = None
+    percussion_density: float | None = None
 
     def validate(self) -> None:
         for name in ("density", "humanize", "variation"):
@@ -25,6 +30,10 @@ class GenerationControls:
             raise ValueError("swing must be between 0.0 and 0.5")
         if self.bars is not None and self.bars <= 0:
             raise ValueError("bars must be a positive integer")
+        for name in ("kick_density", "snare_density", "hat_density", "open_hat_density", "percussion_density"):
+            value = getattr(self, name)
+            if value is not None and not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be between 0.0 and 1.0")
 
 
 def _build_bar_sections(
@@ -70,6 +79,16 @@ def _timing_offset(
     if controls.humanize:
         offset += rng.uniform(-0.08, 0.08) * controls.humanize
     return round(max(-0.45, min(0.49, offset)), 6)
+
+
+def _layer_density_multipliers(controls: GenerationControls) -> dict[str, float]:
+    return {
+        "kick": controls.kick_density if controls.kick_density is not None else 1.0,
+        "snare": controls.snare_density if controls.snare_density is not None else 1.0,
+        "closed_hat": controls.hat_density if controls.hat_density is not None else 1.0,
+        "open_hat": controls.open_hat_density if controls.open_hat_density is not None else 1.0,
+        "percussion": controls.percussion_density if controls.percussion_density is not None else 1.0,
+    }
 
 
 def _humanized_velocity(velocity: int, humanize: float, rng: random.Random) -> int:

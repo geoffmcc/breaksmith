@@ -215,6 +215,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Render a WAV audio preview of each generated pattern",
     )
     generate_parser.add_argument(
+        "--kick-density",
+        type=_bounded_float("kick-density", 0.0, 1.0),
+        default=None,
+        help="Per-layer density multiplier for kick from 0.0 to 1.0",
+    )
+    generate_parser.add_argument(
+        "--snare-density",
+        type=_bounded_float("snare-density", 0.0, 1.0),
+        default=None,
+        help="Per-layer density multiplier for snare from 0.0 to 1.0",
+    )
+    generate_parser.add_argument(
+        "--hat-density",
+        type=_bounded_float("hat-density", 0.0, 1.0),
+        default=None,
+        help="Per-layer density multiplier for closed hat from 0.0 to 1.0",
+    )
+    generate_parser.add_argument(
+        "--open-hat-density",
+        type=_bounded_float("open-hat-density", 0.0, 1.0),
+        default=None,
+        help="Per-layer density multiplier for open hat from 0.0 to 1.0",
+    )
+    generate_parser.add_argument(
+        "--percussion-density",
+        type=_bounded_float("percussion-density", 0.0, 1.0),
+        default=None,
+        help="Per-layer density multiplier for percussion from 0.0 to 1.0",
+    )
+    generate_parser.add_argument(
         "--midi-velocity-curve",
         choices=["linear", "exponential", "compressed", "hard"],
         default="linear",
@@ -290,6 +320,11 @@ def _run_generate(args: argparse.Namespace) -> int:
         variation=args.variation if args.variation is not None else genre_defaults.get("variation", 0.25),
         bars=effective_bars,
         genre=genre,
+        kick_density=args.kick_density,
+        snare_density=args.snare_density,
+        hat_density=args.hat_density,
+        open_hat_density=args.open_hat_density,
+        percussion_density=args.percussion_density,
     )
     controls.validate()
     generation_bar_count = effective_bars

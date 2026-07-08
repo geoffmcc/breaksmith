@@ -8,6 +8,7 @@ from typing import Any
 from .generator_shared import (
     GenerationControls,
     _build_bar_sections,
+    _layer_density_multipliers,
     _section_scaled,
     _velocity,
     _activity,
@@ -236,6 +237,7 @@ def generate_pattern(
 
     hits: dict[str, list[Hit]] = {instrument: [] for instrument in INSTRUMENTS}
     density_scale = 0.45 + controls.density * 1.15
+    ldm = _layer_density_multipliers(controls)
     variation_scale = controls.variation
 
     for bar in range(bars):
@@ -310,7 +312,7 @@ def generate_pattern(
             )
             kick_candidates.append((score, step))
 
-        desired_extra = max(0, round(eff_kick_density * density_scale * 4))
+        desired_extra = max(0, round(eff_kick_density * density_scale * 4 * ldm["kick"]))
         if preset.half_time:
             desired_extra = min(desired_extra, 1)
         selected = 0
@@ -337,7 +339,7 @@ def generate_pattern(
             index = offset + step
             accent = step % 4 == 0
             probability = (
-                eff_hat_density * density_scale
+                eff_hat_density * density_scale * ldm["closed_hat"]
                 + energy * 0.18
                 + _activity(analysis.high_activity, index) * 0.15
             )
@@ -361,7 +363,7 @@ def generate_pattern(
                 )
 
         for step in (steps // 2 - 1, steps - 1):
-            chance = eff_open_hat_prob * density_scale + energy * 0.20
+            chance = eff_open_hat_prob * density_scale * ldm["open_hat"] + energy * 0.20
             if rng.random() < min(0.85, chance):
                 _add_hit(
                     hits,
@@ -380,7 +382,7 @@ def generate_pattern(
         for step in sorted(step % steps for step in ghost_steps):
             index = offset + step
             emptiness = 1.0 - _activity(analysis.onset_activity, index)
-            chance = eff_ghost_prob * density_scale * (0.45 + emptiness)
+            chance = eff_ghost_prob * density_scale * ldm["snare"] * (0.45 + emptiness)
             if rng.random() < min(0.90, chance):
                 _add_hit(
                     hits,
@@ -397,7 +399,7 @@ def generate_pattern(
         if eff_breakbeat_bias:
             percussion_steps.update({1, 3, 6, 11, 15})
         for step in sorted(step % steps for step in percussion_steps):
-            chance = eff_percussion_density * density_scale + eff_breakbeat_bias * 0.10
+            chance = eff_percussion_density * density_scale * ldm["percussion"] + eff_breakbeat_bias * 0.10
             if rng.random() < min(0.85, chance * (0.55 + variation_scale)):
                 _add_hit(
                     hits,
@@ -422,7 +424,7 @@ def generate_pattern(
             fill_start = 3 * steps // 4
             for step in range(fill_start, steps):
                 normalized = (step - fill_start) / max(1, steps - fill_start - 1)
-                chance = eff_fill_density * density_scale * (0.35 + normalized * 0.70)
+                chance = eff_fill_density * density_scale * min(ldm["snare"], ldm["percussion"]) * (0.35 + normalized * 0.70)
                 if rng.random() < min(0.96, chance):
                     instrument = "snare" if step % 2 == 0 else "percussion"
                     _add_hit(

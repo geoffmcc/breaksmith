@@ -15,6 +15,7 @@ from .models import (
 from .generator_shared import (
     GenerationControls,
     _build_bar_sections,
+    _layer_density_multipliers,
     _section_scaled,
     _velocity,
     _activity,
@@ -228,6 +229,7 @@ def generate_hiphop_pattern(
 
     hits: dict[str, list[Hit]] = {instrument: [] for instrument in INSTRUMENTS}
     density_scale = 0.40 + controls.density * 1.10
+    ldm = _layer_density_multipliers(controls)
     variation_scale = controls.variation
     humanize = controls.humanize
     swing = min(0.5, controls.swing + preset.swing_amount)
@@ -278,7 +280,7 @@ def generate_hiphop_pattern(
             )
             kick_candidates.append((score, step))
 
-        desired_extra = max(0, round(eff_kick_density * density_scale * 3))
+        desired_extra = max(0, round(eff_kick_density * density_scale * 3 * ldm["kick"]))
         selected = 0
         for score, step in sorted(kick_candidates, reverse=True):
             if selected >= desired_extra:
@@ -296,7 +298,7 @@ def generate_hiphop_pattern(
         for step in range(0, steps, 2):
             index = offset + step
             accent = step % 4 == 0
-            probability = eff_hat_density * density_scale + (0.08 if accent else 0.0)
+            probability = eff_hat_density * density_scale * ldm["closed_hat"] + (0.08 if accent else 0.0)
             if step % 8 == 4:
                 probability += 0.06
             if rng.random() < min(0.92, probability):
@@ -310,7 +312,7 @@ def generate_hiphop_pattern(
                 )
 
         for step in (steps // 2 - 1, steps - 1):
-            chance = eff_open_hat_prob * density_scale + energy * 0.10
+            chance = eff_open_hat_prob * density_scale * ldm["open_hat"] + energy * 0.10
             if rng.random() < min(0.60, chance):
                 _add_hit(
                     hits, "open_hat", bar, step,
@@ -322,7 +324,7 @@ def generate_hiphop_pattern(
         for gs in sorted(g % steps for g in ghost_steps):
             index = offset + gs
             emptiness = 1.0 - _activity(analysis.onset_activity, index)
-            chance = eff_ghost_prob * density_scale * (0.40 + emptiness)
+            chance = eff_ghost_prob * density_scale * ldm["snare"] * (0.40 + emptiness)
             if rng.random() < min(0.75, chance):
                 _add_hit(
                     hits, "snare", bar, gs,
@@ -332,7 +334,7 @@ def generate_hiphop_pattern(
 
         percussion_steps = {steps // 2 - 2, steps // 2 + 2, steps - 3}
         for ps in sorted(g % steps for g in percussion_steps):
-            chance = eff_percussion_density * density_scale
+            chance = eff_percussion_density * density_scale * ldm["percussion"]
             if rng.random() < min(0.70, chance):
                 _add_hit(
                     hits, "percussion", bar, ps,
@@ -352,7 +354,7 @@ def generate_hiphop_pattern(
             fill_start = 3 * steps // 4
             for fs in range(fill_start, steps):
                 normalized = (fs - fill_start) / max(1, steps - fill_start - 1)
-                chance = eff_fill_density * density_scale * (0.30 + normalized * 0.50)
+                chance = eff_fill_density * density_scale * min(ldm["snare"], ldm["percussion"]) * (0.30 + normalized * 0.50)
                 if rng.random() < min(0.85, chance):
                     inst = "snare" if fs % 2 == 0 else "percussion"
                     _add_hit(

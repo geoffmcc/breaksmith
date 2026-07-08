@@ -29,6 +29,7 @@ class GenreGrammar:
     ghost_fractions: tuple[float, ...]
     fill_stride: int
     swing_base: float
+    phrase_length: int = 4
 
 
 DNB_GRAMMAR = GenreGrammar(

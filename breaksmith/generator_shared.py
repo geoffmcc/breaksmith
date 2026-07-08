@@ -14,6 +14,7 @@ class GenerationControls:
     humanize: float = 0.0
     variation: float = 0.25
     source_restraint: float = 0.0
+    phrase_awareness: float = 0.3
     bars: int | None = None
     genre: str | None = None
     kick_density: float | None = None
@@ -23,7 +24,7 @@ class GenerationControls:
     percussion_density: float | None = None
 
     def validate(self) -> None:
-        for name in ("density", "humanize", "variation", "source_restraint"):
+        for name in ("density", "humanize", "variation", "source_restraint", "phrase_awareness"):
             value = getattr(self, name)
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be between 0.0 and 1.0")

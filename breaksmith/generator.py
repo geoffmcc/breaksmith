@@ -243,18 +243,22 @@ def generate_pattern(
     ldm = _layer_density_multipliers(controls)
     variation_scale = controls.variation
     restraint = controls.source_restraint
+    phrase_aware = controls.phrase_awareness
 
     for bar in range(bars):
         section = bar_sections.get(bar)
         offset = (bar % max(1, analysis.bar_count)) * steps
         energy = _activity(analysis.bar_energy, bar)
         bar_scale = 1.0 + restraint * (energy - 1.0)
+        bar_in_phrase = bar % grammar.phrase_length
+        phrase_t = bar_in_phrase / max(1, grammar.phrase_length - 1)
+        phrase_factor = 1.0 + phrase_aware * (phrase_t - 0.5) * 0.5
 
-        eff_kick_density = _section_scaled(preset.kick_density, section, "kick_scale") * bar_scale
-        eff_hat_density = _section_scaled(preset.hat_density, section, "hat_scale") * bar_scale
-        eff_ghost_prob = _section_scaled(preset.ghost_probability, section, "ghost_scale") * bar_scale
-        eff_fill_density = _section_scaled(preset.fill_density, section, "fill_scale") * bar_scale
-        eff_open_hat_prob = _section_scaled(preset.open_hat_probability, section, "open_hat_scale") * bar_scale
+        eff_kick_density = _section_scaled(preset.kick_density, section, "kick_scale") * bar_scale * phrase_factor
+        eff_hat_density = _section_scaled(preset.hat_density, section, "hat_scale") * bar_scale * phrase_factor
+        eff_ghost_prob = _section_scaled(preset.ghost_probability, section, "ghost_scale") * bar_scale / max(0.1, phrase_factor)
+        eff_fill_density = _section_scaled(preset.fill_density, section, "fill_scale") * bar_scale * phrase_factor
+        eff_open_hat_prob = _section_scaled(preset.open_hat_probability, section, "open_hat_scale") * bar_scale * phrase_factor
         eff_percussion_density = _section_scaled(
             preset.percussion_density, section, "percussion_scale"
         ) * bar_scale
@@ -313,7 +317,7 @@ def generate_pattern(
                 + syncopation * eff_syncopation
                 + breakbeat
                 + mechanical
-                + randomness
+                + randomness * phrase_factor
             )
             kick_candidates.append((score, step))
 
@@ -407,7 +411,7 @@ def generate_pattern(
             percussion_steps.update({1, 3, 6, 11, 15})
         for step in sorted(step % steps for step in percussion_steps):
             chance = eff_percussion_density * density_scale * ldm["percussion"] + eff_breakbeat_bias * 0.10
-            if rng.random() < min(0.85, chance * (0.55 + variation_scale)):
+            if rng.random() < min(0.85, chance * (0.55 + variation_scale * phrase_factor)):
                 _add_hit(
                     hits,
                     "percussion",

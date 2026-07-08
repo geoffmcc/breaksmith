@@ -6,6 +6,7 @@ from typing import Any
 
 
 INSTRUMENTS = ("kick", "snare", "closed_hat", "open_hat", "percussion")
+DURATION_FITS = ("clean", "small_tail", "extra_beat", "partial_bar")
 
 
 @dataclass(slots=True)
@@ -22,6 +23,19 @@ class AudioAnalysis:
     low_activity: list[float]
     high_activity: list[float]
     bar_energy: list[float]
+    grid_start_seconds: float = 0.0
+    effective_duration_seconds: float = 0.0
+    beat_duration_seconds: float = 0.0
+    bar_duration_seconds: float = 0.0
+    step_duration_seconds: float = 0.0
+    complete_bar_count: int = 0
+    suggested_bar_count: int = 0
+    last_full_bar_duration_seconds: float = 0.0
+    duration_remainder_seconds: float = 0.0
+    duration_remainder_beats: float = 0.0
+    duration_remainder_steps: float = 0.0
+    duration_fit: str = "clean"
+    loop_warnings: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:

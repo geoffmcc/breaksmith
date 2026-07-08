@@ -2,11 +2,97 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import Literal
 
 import librosa
 import numpy as np
 
 from .models import AudioAnalysis
+
+
+DurationFit = Literal["clean", "small_tail", "extra_beat", "partial_bar"]
+
+
+def _plural(value: float, singular: str, plural: str | None = None) -> str:
+    if math.isclose(value, 1.0, abs_tol=0.005):
+        return singular
+    return plural or f"{singular}s"
+
+
+def calculate_loop_fit(
+    *,
+    duration_seconds: float,
+    bpm: float,
+    steps_per_bar: int,
+    grid_start_seconds: float = 0.0,
+) -> dict[str, float | int | str | list[str]]:
+    if bpm <= 0:
+        raise ValueError("bpm must be greater than zero")
+    if steps_per_bar <= 0:
+        raise ValueError("steps_per_bar must be greater than zero")
+
+    beats_per_bar = 4
+    beat_duration = 60.0 / bpm
+    bar_duration = beat_duration * beats_per_bar
+    step_duration = bar_duration / steps_per_bar
+    effective_duration = max(0.0, duration_seconds - grid_start_seconds)
+
+    clean_tolerance = min(0.02, step_duration * 0.10)
+    small_tail_tolerance = min(0.12, step_duration * 0.75)
+    nearest_bar_count = max(0, round(effective_duration / bar_duration))
+    nearest_bar_duration = nearest_bar_count * bar_duration
+    nearest_delta = effective_duration - nearest_bar_duration
+
+    if nearest_bar_count > 0 and abs(nearest_delta) <= clean_tolerance:
+        complete_bar_count = nearest_bar_count
+        remainder_seconds = 0.0
+        duration_fit: DurationFit = "clean"
+    else:
+        complete_bar_count = max(0, int(math.floor(effective_duration / bar_duration)))
+        remainder_seconds = max(0.0, effective_duration - complete_bar_count * bar_duration)
+        remainder_beats = remainder_seconds / beat_duration if beat_duration else 0.0
+        if remainder_seconds <= small_tail_tolerance:
+            duration_fit = "small_tail"
+        elif abs(remainder_beats - 1.0) <= 0.12:
+            duration_fit = "extra_beat"
+        else:
+            duration_fit = "partial_bar"
+
+    last_full_bar_duration = complete_bar_count * bar_duration
+    remainder_beats = remainder_seconds / beat_duration if beat_duration else 0.0
+    remainder_steps = remainder_seconds / step_duration if step_duration else 0.0
+    suggested_bar_count = max(1, complete_bar_count)
+    loop_warnings: list[str] = []
+
+    if duration_fit == "small_tail":
+        loop_warnings.append(
+            f"Audio has a short {remainder_seconds:.2f}s tail beyond the "
+            f"{complete_bar_count}-bar boundary."
+        )
+    elif duration_fit == "extra_beat":
+        nearest_beat = max(1, round(remainder_beats))
+        loop_warnings.append(
+            f"Audio extends {remainder_seconds:.2f}s past a clean {complete_bar_count}-bar "
+            f"boundary, approximately {nearest_beat} {_plural(nearest_beat, 'beat')}."
+        )
+    elif duration_fit == "partial_bar":
+        loop_warnings.append("Source length is not aligned to complete 4/4 bars.")
+
+    return {
+        "grid_start_seconds": round(grid_start_seconds, 6),
+        "effective_duration_seconds": round(effective_duration, 6),
+        "beat_duration_seconds": round(beat_duration, 6),
+        "bar_duration_seconds": round(bar_duration, 6),
+        "step_duration_seconds": round(step_duration, 6),
+        "complete_bar_count": complete_bar_count,
+        "suggested_bar_count": suggested_bar_count,
+        "last_full_bar_duration_seconds": round(last_full_bar_duration, 6),
+        "duration_remainder_seconds": round(remainder_seconds, 6),
+        "duration_remainder_beats": round(remainder_beats, 6),
+        "duration_remainder_steps": round(remainder_steps, 6),
+        "duration_fit": duration_fit,
+        "loop_warnings": loop_warnings,
+    }
 
 
 def _normalize(values: np.ndarray) -> np.ndarray:
@@ -115,9 +201,19 @@ def analyze_audio(
     beats_per_bar = 4
     step_duration = beat_duration * beats_per_bar / steps_per_bar
     usable_duration = max(0.0, duration - first_beat)
-    total_steps = max(steps_per_bar, int(math.ceil(usable_duration / step_duration)))
-    bar_count = max(1, int(math.ceil(total_steps / steps_per_bar)))
-    total_steps = bar_count * steps_per_bar
+    loop_fit = calculate_loop_fit(
+        duration_seconds=duration,
+        bpm=bpm,
+        steps_per_bar=steps_per_bar,
+        grid_start_seconds=first_beat,
+    )
+    if loop_fit["duration_fit"] == "clean":
+        bar_count = max(1, int(loop_fit["complete_bar_count"]))
+        total_steps = bar_count * steps_per_bar
+    else:
+        total_steps = max(steps_per_bar, int(math.ceil(usable_duration / step_duration)))
+        bar_count = max(1, int(math.ceil(total_steps / steps_per_bar)))
+        total_steps = bar_count * steps_per_bar
 
     step_times = first_beat + np.arange(total_steps, dtype=float) * step_duration
     beat_times = first_beat + np.arange(bar_count * beats_per_bar, dtype=float) * beat_duration
@@ -166,5 +262,18 @@ def analyze_audio(
         low_activity=[round(float(value), 6) for value in low_steps],
         high_activity=[round(float(value), 6) for value in high_steps],
         bar_energy=[round(float(value), 6) for value in bar_energy],
+        grid_start_seconds=float(loop_fit["grid_start_seconds"]),
+        effective_duration_seconds=float(loop_fit["effective_duration_seconds"]),
+        beat_duration_seconds=float(loop_fit["beat_duration_seconds"]),
+        bar_duration_seconds=float(loop_fit["bar_duration_seconds"]),
+        step_duration_seconds=float(loop_fit["step_duration_seconds"]),
+        complete_bar_count=int(loop_fit["complete_bar_count"]),
+        suggested_bar_count=int(loop_fit["suggested_bar_count"]),
+        last_full_bar_duration_seconds=float(loop_fit["last_full_bar_duration_seconds"]),
+        duration_remainder_seconds=float(loop_fit["duration_remainder_seconds"]),
+        duration_remainder_beats=float(loop_fit["duration_remainder_beats"]),
+        duration_remainder_steps=float(loop_fit["duration_remainder_steps"]),
+        duration_fit=str(loop_fit["duration_fit"]),
+        loop_warnings=list(loop_fit["loop_warnings"]),
         warnings=warnings,
     )

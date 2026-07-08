@@ -424,6 +424,11 @@ def generate_pattern(
             "generator": "Breaksmith",
             "description": preset.description,
             "generator_version": "0.1.0",
+            "source_detected_bars": analysis.bar_count,
+            "source_complete_bars": analysis.complete_bar_count,
+            "generated_bars": bars,
+            "bars_override": controls.bars,
+            "source_activity_strategy": "cycle analyzed bar activity when generated bars exceed source bars",
             "controls": asdict(controls),
             "timing": {
                 "json": "Logical grid positions plus per-hit timing_offset_steps.",

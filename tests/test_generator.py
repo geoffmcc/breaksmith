@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import argparse
+import json
+import re
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 from mido import MidiFile
 
 import breaksmith
+import breaksmith.cli as cli
+from breaksmith.analysis import calculate_loop_fit
 from breaksmith.cli import build_parser
+from breaksmith.exporters.json_export import write_pattern
 from breaksmith.exporters.midi import write_midi
 from breaksmith.exporters.strudel import write_strudel
 from breaksmith.generator import STYLE_PRESETS, GenerationControls, generate_pattern
@@ -28,7 +35,91 @@ def fake_analysis() -> AudioAnalysis:
         low_activity=[0.15 + (0.75 if index in {0, 6, 16, 26, 32, 42, 48, 58} else 0.0) for index in range(steps)],
         high_activity=[0.35 + (0.35 if index % 2 == 0 else 0.0) for index in range(steps)],
         bar_energy=[0.35, 0.55, 0.70, 0.45],
+        grid_start_seconds=0.0,
+        effective_duration_seconds=8.0,
+        beat_duration_seconds=0.348837,
+        bar_duration_seconds=1.395349,
+        step_duration_seconds=0.087209,
+        complete_bar_count=4,
+        suggested_bar_count=4,
+        last_full_bar_duration_seconds=5.581395,
+        duration_remainder_seconds=0.0,
+        duration_remainder_beats=0.0,
+        duration_remainder_steps=0.0,
+        duration_fit="clean",
+        loop_warnings=[],
     )
+
+
+def analysis_with_loop_duration(duration_seconds: float) -> AudioAnalysis:
+    analysis = fake_analysis()
+    fit = calculate_loop_fit(
+        duration_seconds=duration_seconds,
+        bpm=172.0,
+        steps_per_bar=16,
+        grid_start_seconds=0.0,
+    )
+    analysis.duration_seconds = duration_seconds
+    analysis.bar_count = max(1, int(-(-duration_seconds // float(fit["bar_duration_seconds"]))))
+    analysis.grid_start_seconds = float(fit["grid_start_seconds"])
+    analysis.effective_duration_seconds = float(fit["effective_duration_seconds"])
+    analysis.beat_duration_seconds = float(fit["beat_duration_seconds"])
+    analysis.bar_duration_seconds = float(fit["bar_duration_seconds"])
+    analysis.step_duration_seconds = float(fit["step_duration_seconds"])
+    analysis.complete_bar_count = int(fit["complete_bar_count"])
+    analysis.suggested_bar_count = int(fit["suggested_bar_count"])
+    analysis.last_full_bar_duration_seconds = float(fit["last_full_bar_duration_seconds"])
+    analysis.duration_remainder_seconds = float(fit["duration_remainder_seconds"])
+    analysis.duration_remainder_beats = float(fit["duration_remainder_beats"])
+    analysis.duration_remainder_steps = float(fit["duration_remainder_steps"])
+    analysis.duration_fit = str(fit["duration_fit"])
+    analysis.loop_warnings = list(fit["loop_warnings"])
+    return analysis
+
+
+def bars_duration(bars: float, bpm: float = 172.0) -> float:
+    return bars * 4 * 60 / bpm
+
+
+def test_loop_fit_clean_8_bar_loop() -> None:
+    fit = calculate_loop_fit(duration_seconds=bars_duration(8), bpm=172.0, steps_per_bar=16)
+    assert fit["duration_fit"] == "clean"
+    assert fit["complete_bar_count"] == 8
+    assert fit["duration_remainder_beats"] == pytest.approx(0.0)
+    assert fit["suggested_bar_count"] == 8
+
+
+def test_loop_fit_8_bars_plus_one_beat() -> None:
+    fit = calculate_loop_fit(
+        duration_seconds=bars_duration(8) + 60 / 172,
+        bpm=172.0,
+        steps_per_bar=16,
+    )
+    assert fit["duration_fit"] == "extra_beat"
+    assert fit["complete_bar_count"] == 8
+    assert fit["duration_remainder_beats"] == pytest.approx(1.0)
+    assert fit["suggested_bar_count"] == 8
+    assert "approximately 1 beat" in " ".join(fit["loop_warnings"])
+
+
+def test_loop_fit_8_bars_plus_small_tail() -> None:
+    fit = calculate_loop_fit(duration_seconds=bars_duration(8) + 0.03, bpm=172.0, steps_per_bar=16)
+    assert fit["duration_fit"] == "small_tail"
+    assert fit["suggested_bar_count"] == 8
+
+
+def test_loop_fit_7_and_a_half_bars_is_partial() -> None:
+    fit = calculate_loop_fit(duration_seconds=bars_duration(7.5), bpm=172.0, steps_per_bar=16)
+    assert fit["duration_fit"] == "partial_bar"
+    assert fit["complete_bar_count"] == 7
+    assert fit["duration_remainder_beats"] == pytest.approx(2.0)
+    assert "not aligned" in " ".join(fit["loop_warnings"])
+
+
+def test_loop_fit_boundary_with_float_noise_is_clean() -> None:
+    fit = calculate_loop_fit(duration_seconds=bars_duration(8) + 0.001, bpm=172.0, steps_per_bar=16)
+    assert fit["duration_fit"] == "clean"
+    assert fit["complete_bar_count"] == 8
 
 
 def test_package_imports_under_breaksmith() -> None:
@@ -128,6 +219,36 @@ def test_requested_bar_count_is_respected() -> None:
     assert all(hit.bar < 8 for hits in pattern.hits.values() for hit in hits)
 
 
+def test_bars_override_clamps_extra_beat_source_to_8_bars() -> None:
+    analysis = analysis_with_loop_duration(bars_duration(8) + 60 / 172)
+    pattern = generate_pattern(analysis, "rolling", seed=42, controls=GenerationControls(bars=8))
+    assert analysis.bar_count == 9
+    assert analysis.complete_bar_count == 8
+    assert pattern.bars == 8
+    assert pattern.metadata["source_detected_bars"] == 9
+    assert pattern.metadata["generated_bars"] == 8
+    assert pattern.metadata["bars_override"] == 8
+
+
+def test_without_bars_preserves_ceil_behavior_for_extra_beat_source() -> None:
+    analysis = analysis_with_loop_duration(bars_duration(8) + 60 / 172)
+    pattern = generate_pattern(analysis, "rolling", seed=42)
+    assert analysis.duration_fit == "extra_beat"
+    assert pattern.bars == 9
+
+
+def test_pattern_json_records_source_and_generated_bar_counts(tmp_path: Path) -> None:
+    analysis = analysis_with_loop_duration(bars_duration(8) + 60 / 172)
+    pattern = generate_pattern(analysis, "rolling", seed=42, controls=GenerationControls(bars=8))
+    output = tmp_path / "pattern.json"
+    write_pattern(pattern, output)
+    data = json.loads(output.read_text(encoding="utf-8"))
+    assert data["bars"] == 8
+    assert data["metadata"]["source_detected_bars"] == 9
+    assert data["metadata"]["generated_bars"] == 8
+    assert data["metadata"]["bars_override"] == 8
+
+
 def test_midi_export_completes_and_events_remain_ordered(tmp_path: Path) -> None:
     controls = GenerationControls(swing=0.2, humanize=1.0, variation=0.7)
     pattern = generate_pattern(fake_analysis(), "rolling", seed=42, controls=controls)
@@ -143,6 +264,26 @@ def test_midi_export_completes_and_events_remain_ordered(tmp_path: Path) -> None
         assert absolute >= 0
 
 
+def test_midi_export_has_no_events_outside_requested_bars(tmp_path: Path) -> None:
+    analysis = analysis_with_loop_duration(bars_duration(8) + 60 / 172)
+    pattern = generate_pattern(
+        analysis,
+        "jungle",
+        seed=42,
+        controls=GenerationControls(bars=8, swing=0.2, humanize=1.0),
+    )
+    output = tmp_path / "pattern.mid"
+    write_midi(pattern, output)
+    midi = MidiFile(output)
+    ticks_per_step = midi.ticks_per_beat * 4 // pattern.steps_per_bar
+    end_tick = pattern.bars * pattern.steps_per_bar * ticks_per_step
+    for track in midi.tracks:
+        absolute = 0
+        for message in track:
+            absolute += message.time
+            assert absolute <= end_tick
+
+
 def test_strudel_export_contains_breaksmith_branding(tmp_path: Path) -> None:
     pattern = generate_pattern(fake_analysis(), "liquid", seed=42)
     output = tmp_path / "pattern.strudel.js"
@@ -151,6 +292,96 @@ def test_strudel_export_contains_breaksmith_branding(tmp_path: Path) -> None:
     assert "Generated by Breaksmith" in text
     assert "setcpm" in text
     assert "stack(" in text
+
+
+def test_strudel_export_contains_exact_requested_bar_count(tmp_path: Path) -> None:
+    analysis = analysis_with_loop_duration(bars_duration(8) + 60 / 172)
+    pattern = generate_pattern(analysis, "rolling", seed=42, controls=GenerationControls(bars=8))
+    output = tmp_path / "pattern.strudel.js"
+    write_strudel(pattern, output)
+    text = output.read_text(encoding="utf-8")
+    first_pattern = re.search(r's\("([^"]+)"\)', text)
+    assert first_pattern is not None
+    assert len(first_pattern.group(1).split(" | ")) == 8
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "abc"])
+def test_cli_rejects_invalid_bars_values(value: str) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["generate", "input.wav", "--bars", value])
+
+
+def test_requesting_more_bars_than_source_does_not_crash() -> None:
+    pattern = generate_pattern(fake_analysis(), "rolling", seed=42, controls=GenerationControls(bars=12))
+    assert pattern.bars == 12
+    assert pattern.metadata["source_activity_strategy"].startswith("cycle analyzed")
+
+
+def test_analyze_output_includes_grid_fit_diagnostics(monkeypatch, capsys, tmp_path: Path) -> None:
+    analysis = analysis_with_loop_duration(bars_duration(8) + 60 / 172)
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    args = argparse.Namespace(
+        audio=Path("test.wav"),
+        output=tmp_path / "analysis.json",
+        bpm=172.0,
+        steps_per_bar=16,
+    )
+    assert cli._run_analyze(args) == 0
+    output = capsys.readouterr().out
+    assert "Grid fit: 8 complete bars + 1.00 beat" in output
+    assert "approximately 1 beat" in output
+    assert "--bars 8" in output
+
+
+def test_generate_output_suggests_bars_for_extra_beat_source(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    analysis = analysis_with_loop_duration(bars_duration(8) + 60 / 172)
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    args = SimpleNamespace(
+        audio=Path("test.wav"),
+        output=tmp_path / "output",
+        bpm=172.0,
+        steps_per_bar=16,
+        style="rolling",
+        seed=42,
+        bars=None,
+        density=0.5,
+        swing=0.0,
+        humanize=0.0,
+        variation=0.25,
+    )
+    assert cli._run_generate(args) == 0
+    output = capsys.readouterr().out
+    assert "Detected source fit: 8 complete bars + 1.00 beat" in output
+    assert "Generating 9 bars because --bars was not specified." in output
+    assert "--bars 8" in output
+
+
+def test_generate_output_reports_exact_requested_bars(monkeypatch, capsys, tmp_path: Path) -> None:
+    analysis = analysis_with_loop_duration(bars_duration(8) + 60 / 172)
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    args = SimpleNamespace(
+        audio=Path("test.wav"),
+        output=tmp_path / "output",
+        bpm=172.0,
+        steps_per_bar=16,
+        style="rolling",
+        seed=42,
+        bars=8,
+        density=0.5,
+        swing=0.0,
+        humanize=0.0,
+        variation=0.25,
+    )
+    assert cli._run_generate(args) == 0
+    output = capsys.readouterr().out
+    assert "Requested grid: 8 bars" in output
+    assert "Ignoring 0.35s of source audio beyond the requested grid boundary." in output
+    assert "Generated exactly 8 bars." in output
 
 
 def test_no_stale_branding_in_active_source_files() -> None:

@@ -25,10 +25,13 @@ from .models import (
     GENRES,
     GROOVE_PRESETS,
     HIPHOP_STYLES,
+    METER_PRESETS,
     Section,
     arrangement_bar_count,
     ensure_output_dir,
+    parse_time_signature,
     resolve_genre,
+    validate_beat_grouping,
     validate_style_genre,
 )
 from .synth import write_preview
@@ -130,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("audio", type=Path)
     analyze_parser.add_argument("--output", type=Path, default=Path("analysis.json"))
     analyze_parser.add_argument("--bpm", type=_positive_bpm, help="Override tempo estimation")
-    analyze_parser.add_argument("--steps-per-bar", type=int, default=16)
+    analyze_parser.add_argument("--steps-per-bar", type=int, default=None)
     analyze_parser.add_argument(
         "--grid-start",
         type=_non_negative_float("grid-start"),
@@ -150,6 +153,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--features-csv",
         type=Path,
         help="Write step-level source activity maps as CSV",
+    )
+    analyze_parser.add_argument(
+        "--time-signature",
+        type=str,
+        default="4/4",
+        choices=sorted(METER_PRESETS),
+        help="Time signature / meter (default: 4/4)",
+    )
+    analyze_parser.add_argument(
+        "--beat-grouping",
+        type=str,
+        default=None,
+        help="Beat grouping override (e.g. '3+3' for 6/8, '2+2+3' for 7/8). Default follows meter.",
     )
 
     generate_parser = subparsers.add_parser(
@@ -181,7 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of variant patterns to generate (each gets seed + variant index)",
     )
     generate_parser.add_argument("--bpm", type=_positive_bpm, help="Override tempo estimation")
-    generate_parser.add_argument("--steps-per-bar", type=int, default=16)
+    generate_parser.add_argument("--steps-per-bar", type=int, default=None)
     generate_parser.add_argument(
         "--grid-start",
         type=_non_negative_float("grid-start"),
@@ -292,17 +308,34 @@ def build_parser() -> argparse.ArgumentParser:
         default="linear",
         help="Velocity curve shape for MIDI note velocities",
     )
+    generate_parser.add_argument(
+        "--time-signature",
+        type=str,
+        default="4/4",
+        choices=sorted(METER_PRESETS),
+        help="Time signature / meter (default: 4/4)",
+    )
+    generate_parser.add_argument(
+        "--beat-grouping",
+        type=str,
+        default=None,
+        help="Beat grouping override (e.g. '3+3' for 6/8, '2+2+3' for 7/8). Default follows meter.",
+    )
 
     return parser
 
 
 def _run_analyze(args: argparse.Namespace) -> int:
+    meter = parse_time_signature(args.time_signature)
+    if args.beat_grouping is not None:
+        meter = validate_beat_grouping(meter, args.beat_grouping)
     analysis = analyze_audio(
         args.audio,
         steps_per_bar=args.steps_per_bar,
         bpm_override=args.bpm,
         grid_start_override=args.grid_start,
         downbeat_override=args.downbeat_start,
+        meter=meter,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     write_analysis(analysis, args.output)
@@ -328,12 +361,16 @@ def _run_analyze(args: argparse.Namespace) -> int:
 
 def _run_generate(args: argparse.Namespace) -> int:
     output_dir = ensure_output_dir(args.output)
+    meter = parse_time_signature(args.time_signature)
+    if args.beat_grouping is not None:
+        meter = validate_beat_grouping(meter, args.beat_grouping)
     analysis = analyze_audio(
         args.audio,
-        steps_per_bar=args.steps_per_bar,
+        steps_per_bar=args.steps_per_bar or meter.steps_per_bar,
         bpm_override=args.bpm,
         grid_start_override=args.grid_start,
         downbeat_override=args.downbeat_start,
+        meter=meter,
     )
     analysis_path = output_dir / "analysis.json"
     write_analysis(analysis, analysis_path)
@@ -370,6 +407,7 @@ def _run_generate(args: argparse.Namespace) -> int:
         hat_density=args.hat_density,
         open_hat_density=args.open_hat_density,
         percussion_density=args.percussion_density,
+        meter=meter,
     )
     controls.validate()
     generation_bar_count = effective_bars

@@ -231,6 +231,15 @@ def generate_hiphop_pattern(
         else (controls.bars or analysis.bar_count)
     )
 
+    primary_beats = controls.meter.primary_beats_per_bar
+    steps_per_beat = steps // primary_beats
+    if primary_beats == 4:
+        snare_fractions = (0.25, 0.75)
+    elif primary_beats == 3:
+        snare_fractions = (1.0 / 3.0,)
+    else:
+        snare_fractions = (0.5,)
+
     bar_sections = _build_bar_sections(bars, arrangement)
 
     hits: dict[str, list[Hit]] = {instrument: [] for instrument in INSTRUMENTS}
@@ -263,7 +272,7 @@ def generate_hiphop_pattern(
             preset.percussion_density, section, "percussion_scale"
         ) * bar_scale * phrase_factor
 
-        for fraction in (0.25, 0.75):
+        for fraction in snare_fractions:
             step = _step_from_fraction(steps, fraction)
             _add_hit(
                 hits, "snare", bar, step,
@@ -282,7 +291,7 @@ def generate_hiphop_pattern(
             groove_name, steps,
         )
 
-        kick_forbidden = {_step_from_fraction(steps, f) for f in (0.25, 0.75)}
+        kick_forbidden = {_step_from_fraction(steps, f) for f in snare_fractions}
         kick_candidates: list[tuple[float, int]] = []
         for step in range(1, steps):
             if step in kick_forbidden:
@@ -295,7 +304,7 @@ def generate_hiphop_pattern(
             )
             kick_candidates.append((score, step))
 
-        desired_extra = max(0, round(eff_kick_density * density_scale * 3 * ldm["kick"]))
+        desired_extra = max(0, round(eff_kick_density * density_scale * (primary_beats - 1) * ldm["kick"]))
         selected = 0
         for score, step in sorted(kick_candidates, reverse=True):
             if selected >= desired_extra:
@@ -313,9 +322,9 @@ def generate_hiphop_pattern(
 
         for step in range(0, steps, grammar.hat_stride):
             index = offset + step
-            accent = step % 4 == 0
+            accent = step % steps_per_beat == 0
             probability = eff_hat_density * density_scale * ldm["closed_hat"] + (0.08 if accent else 0.0)
-            if step % 8 == 4:
+            if step % (2 * steps_per_beat) == steps_per_beat:
                 probability += 0.06
             if rng.random() < min(0.92, probability):
                 base = max(
@@ -352,7 +361,11 @@ def generate_hiphop_pattern(
                     groove_name, steps,
                 )
 
-        percussion_steps = {steps // 2 - 2, steps // 2 + 2, steps - 3}
+        percussion_steps = {
+            2 * steps_per_beat - 2,
+            2 * steps_per_beat + 2,
+            steps - 3,
+        }
         for ps in sorted(g % steps for g in percussion_steps):
             chance = eff_percussion_density * density_scale * ldm["percussion"] * phrase_factor
             if rng.random() < min(0.70, chance):
@@ -372,7 +385,7 @@ def generate_hiphop_pattern(
             if next_section is not None and next_section is not section:
                 is_phrase_end = True
         if is_phrase_end:
-            fill_start = 3 * steps // 4
+            fill_start = (primary_beats - 1) * steps_per_beat
             for fs in range(fill_start, steps):
                 normalized = (fs - fill_start) / max(1, steps - fill_start - 1)
                 chance = eff_fill_density * density_scale * min(ldm["snare"], ldm["percussion"]) * (0.30 + normalized * 0.50)
@@ -404,6 +417,7 @@ def generate_hiphop_pattern(
         hits=hits,
         source_audio=analysis.source,
         seed=seed,
+        meter=controls.meter,
         metadata={
             "generator": "Breaksmith",
             "genre": "hiphop",

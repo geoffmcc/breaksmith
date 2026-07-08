@@ -193,6 +193,16 @@ uv run breaksmith generate input.wav --bars 16 --preview --preview-bars 8
 
 This generates 16 bars of pattern but only renders the first 8 for preview.
 
+### Grid feels wrong in 3/4 or 6/8
+
+When using `--time-signature 3/4` or `6/8`, the step grid changes (12 steps per bar instead of 16). Style presets designed for 4/4 are adapted, which may feel less natural in non-4/4 meters.
+
+**Fix**: Start with a sparse style (`minimal`, `laid_back`) and adjust density upwards. Use `--beat-grouping` to fine-tune accent placement.
+
+```bash
+uv run breaksmith generate input.wav --time-signature 3/4 --style minimal --density 0.4 --preview
+```
+
 ### Preview does not match the groove I wanted
 
 The groove feel is built from multiple layers:

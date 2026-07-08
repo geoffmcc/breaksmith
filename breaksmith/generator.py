@@ -248,6 +248,9 @@ def generate_pattern(
     restraint = controls.source_restraint
     phrase_aware = controls.phrase_awareness
 
+    primary_beats = controls.meter.primary_beats_per_bar
+    steps_per_beat = steps // primary_beats
+
     for bar in range(bars):
         section = bar_sections.get(bar)
         offset = (bar % max(1, analysis.bar_count)) * steps
@@ -313,9 +316,12 @@ def generate_pattern(
                 _activity(analysis.low_activity, index) * 0.62
                 + _activity(analysis.onset_activity, index) * 0.38
             )
-            syncopation = 0.18 if step % 4 in {1, 2, 3} else 0.0
-            breakbeat = eff_breakbeat_bias * (0.16 if step in {2, 5, 7, 10, 14, 15} else 0.0)
-            mechanical = eff_mechanical_bias * (0.14 if step in {3, 6, 9, 11, 14} else -0.04)
+            off_beat = step % steps_per_beat != 0
+            syncopation = 0.18 if off_beat else 0.0
+            breakbeat = eff_breakbeat_bias * (0.16 if off_beat else 0.0)
+            mechanical = eff_mechanical_bias * (
+                0.14 if step % steps_per_beat == steps_per_beat - 1 else -0.04
+            )
             randomness = rng.uniform(-0.18, 0.18) * variation_scale
             score = (
                 activity_score * preset.activity_response
@@ -326,7 +332,7 @@ def generate_pattern(
             )
             kick_candidates.append((score, step))
 
-        desired_extra = max(0, round(eff_kick_density * density_scale * 4 * ldm["kick"]))
+        desired_extra = max(0, round(eff_kick_density * density_scale * primary_beats * ldm["kick"]))
         if preset.half_time:
             desired_extra = min(desired_extra, 1)
         selected = 0
@@ -352,13 +358,13 @@ def generate_pattern(
 
         for step in range(0, steps, grammar.hat_stride):
             index = offset + step
-            accent = step % 4 == 0
+            accent = step % steps_per_beat == 0
             probability = (
                 eff_hat_density * density_scale * ldm["closed_hat"]
                 + energy * 0.18
                 + _activity(analysis.high_activity, index) * 0.15
             )
-            if preset.half_time and step % 4 not in {0, 2}:
+            if preset.half_time and step % steps_per_beat not in {0, steps_per_beat // 2}:
                 probability *= 0.45
             if eff_mechanical_bias and step % 2 == 1:
                 probability *= 0.58
@@ -397,7 +403,7 @@ def generate_pattern(
 
         ghost_set = {_step_from_fraction(steps, f) for f in grammar.ghost_fractions}
         if eff_breakbeat_bias:
-            ghost_set.update({steps // 4 + 2, steps // 2 - 1, steps - 3})
+            ghost_set.update({steps_per_beat + 2, 2 * steps_per_beat - 1, steps - 3})
         for step in sorted(step % steps for step in ghost_set):
             index = offset + step
             emptiness = 1.0 - _activity(analysis.onset_activity, index)
@@ -415,9 +421,14 @@ def generate_pattern(
                     steps_per_bar=steps,
                 )
 
-        percussion_steps = {steps // 2 - 2, steps // 2 + 1, steps - 3}
+        percussion_steps = {
+            2 * steps_per_beat - 2,
+            2 * steps_per_beat + 1,
+            steps - 3,
+        }
         if eff_breakbeat_bias:
-            percussion_steps.update({1, 3, 6, 11, 15})
+            bb_perc = {1, 3, steps_per_beat + 2, 2 * steps_per_beat + 3}
+            percussion_steps.update(g % steps for g in bb_perc)
         for step in sorted(step % steps for step in percussion_steps):
             chance = eff_percussion_density * density_scale * ldm["percussion"] + eff_breakbeat_bias * 0.10
             if rng.random() < min(0.85, chance * (0.55 + variation_scale * phrase_factor)):
@@ -442,7 +453,7 @@ def generate_pattern(
             if next_bar_section is not None and next_bar_section is not section:
                 is_phrase_end = True
         if is_phrase_end:
-            fill_start = 3 * steps // 4
+            fill_start = (primary_beats - 1) * steps_per_beat
             for step in range(fill_start, steps):
                 normalized = (step - fill_start) / max(1, steps - fill_start - 1)
                 chance = eff_fill_density * density_scale * min(ldm["snare"], ldm["percussion"]) * (0.35 + normalized * 0.70)
@@ -477,6 +488,7 @@ def generate_pattern(
         hits=hits,
         source_audio=analysis.source,
         seed=seed,
+        meter=controls.meter,
         metadata={
             "generator": "Breaksmith",
             "genre": genre,

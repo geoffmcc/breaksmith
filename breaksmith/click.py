@@ -47,7 +47,7 @@ def render_click_tracks(
     time = analysis.grid_start_seconds
     while time < analysis.duration_seconds:
         start = round(time * sample_rate)
-        _add_click(click, start, downbeat if beat_index % 4 == 0 else beat)
+        _add_click(click, start, downbeat if beat_index % analysis.meter.primary_beats_per_bar == 0 else beat)
         beat_index += 1
         time = analysis.grid_start_seconds + beat_index * analysis.beat_duration_seconds
 

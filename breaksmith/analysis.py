@@ -7,7 +7,7 @@ from typing import Literal
 import librosa
 import numpy as np
 
-from .models import AudioAnalysis
+from .models import METER_44, AudioAnalysis, Meter
 
 
 DurationFit = Literal["clean", "small_tail", "extra_beat", "partial_bar"]
@@ -25,16 +25,17 @@ def calculate_loop_fit(
     bpm: float,
     steps_per_bar: int,
     grid_start_seconds: float = 0.0,
+    meter: Meter | None = None,
 ) -> dict[str, float | int | str | list[str]]:
     if bpm <= 0:
         raise ValueError("bpm must be greater than zero")
     if steps_per_bar <= 0:
         raise ValueError("steps_per_bar must be greater than zero")
 
-    beats_per_bar = 4
-    beat_duration = 60.0 / bpm
-    bar_duration = beat_duration * beats_per_bar
-    step_duration = bar_duration / steps_per_bar
+    m = meter or METER_44
+    beat_duration = m.beat_duration(bpm)
+    bar_duration = m.bar_duration(bpm)
+    step_duration = m.step_duration(bpm)
     effective_duration = max(0.0, duration_seconds - grid_start_seconds)
 
     clean_tolerance = min(0.02, step_duration * 0.10)
@@ -76,7 +77,9 @@ def calculate_loop_fit(
             f"boundary, approximately {nearest_beat} {_plural(nearest_beat, 'beat')}."
         )
     elif duration_fit == "partial_bar":
-        loop_warnings.append("Source length is not aligned to complete 4/4 bars.")
+        loop_warnings.append(
+            f"Source length is not aligned to complete {m.display} bars."
+        )
 
     return {
         "grid_start_seconds": round(grid_start_seconds, 6),
@@ -218,17 +221,21 @@ def _coerce_tempo(value: object) -> float:
 def analyze_audio(
     audio_path: Path,
     *,
-    steps_per_bar: int = 16,
+    steps_per_bar: int | None = None,
     bpm_override: float | None = None,
     grid_start_override: float | None = None,
     downbeat_override: float | None = None,
+    meter: Meter | None = None,
 ) -> AudioAnalysis:
+    m = meter or METER_44
+    if steps_per_bar is None:
+        steps_per_bar = m.steps_per_bar
+    if steps_per_bar <= 0 or steps_per_bar < m.primary_beats_per_bar:
+        raise ValueError(f"steps_per_bar must be positive and at least {m.primary_beats_per_bar}")
     if not audio_path.exists():
         raise FileNotFoundError(f"Audio file does not exist: {audio_path}")
     if not audio_path.is_file():
         raise ValueError(f"Audio path is not a file: {audio_path}")
-    if steps_per_bar <= 0 or steps_per_bar % 4 != 0:
-        raise ValueError("steps_per_bar must be a positive multiple of four")
     if grid_start_override is not None and grid_start_override < 0:
         raise ValueError("grid_start must be greater than or equal to zero")
     if downbeat_override is not None and downbeat_override < 0:
@@ -287,7 +294,8 @@ def analyze_audio(
         hop_length=hop_length,
     ).astype(float)
 
-    beat_duration = 60.0 / bpm
+    beat_duration = m.beat_duration(bpm)
+    step_duration = m.step_duration(bpm)
     grid_start_source = "detected"
     if downbeat_override is not None:
         first_beat = float(downbeat_override)
@@ -310,8 +318,6 @@ def analyze_audio(
         grid_start_source = "audio_start"
         warnings.append("Tracked downbeat was late; the grid was anchored to 0 seconds.")
 
-    beats_per_bar = 4
-    step_duration = beat_duration * beats_per_bar / steps_per_bar
     usable_duration = max(0.0, duration - first_beat)
     detected_beat_count = int(beat_times_detected.size)
     expected_beat_count = max(1, round(usable_duration / beat_duration))
@@ -326,6 +332,7 @@ def analyze_audio(
         bpm=bpm,
         steps_per_bar=steps_per_bar,
         grid_start_seconds=first_beat,
+        meter=m,
     )
     if loop_fit["duration_fit"] == "clean":
         bar_count = max(1, int(loop_fit["complete_bar_count"]))
@@ -336,7 +343,9 @@ def analyze_audio(
         total_steps = bar_count * steps_per_bar
 
     step_times = first_beat + np.arange(total_steps, dtype=float) * step_duration
-    beat_times = first_beat + np.arange(bar_count * beats_per_bar, dtype=float) * beat_duration
+    beat_times = first_beat + np.arange(
+        bar_count * m.primary_beats_per_bar, dtype=float
+    ) * beat_duration
 
     activity_maps = extract_activity_maps(
         y=y,
@@ -372,6 +381,7 @@ def analyze_audio(
         bar_density=activity_maps["bar_density"],
         bar_brightness=activity_maps["bar_brightness"],
         bar_silence=activity_maps["bar_silence"],
+        meter=m,
         grid_start_seconds=float(loop_fit["grid_start_seconds"]),
         downbeat_seconds=float(loop_fit["grid_start_seconds"]),
         grid_start_source=grid_start_source,

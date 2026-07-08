@@ -18,16 +18,18 @@ uv run pytest
 
 - **genre** defines the rhythmic grammar (note stride, bar grid, default controls).
 - **style** defines the groove vocabulary (density per instrument, syncopation, fill frequency, velocity ranges).
+- **meter** defines the time signature (step grid, beat groupings, accent positions).
 - **GenerationControls** is the single parameter object flowing into all generators.
 - Generators are pure functions: `generate_pattern(source: dict, controls: GenerationControls) -> Pattern`.
 - Add new genres by creating a generator module and a style preset dict.
 - Add new styles by adding entries to the style preset dict.
+- Add new meters by adding a `Meter` preset in `models.py` and updating `parse_time_signature()`.
 - Add new controls by adding a field to `GenerationControls` and threading it through.
 
 ## Tests
 
-- 83 tests in `tests/test_generator.py`.
-- Tests cover deterministic output, genre-style pairs, control ranges, preset loading, variant generation, per-layer density, source restraint, phrase awareness, groove templates, and import of all modules.
+- 108 tests in `tests/test_generator.py`.
+- Tests cover deterministic output, genre-style pairs, control ranges, preset loading, variant generation, per-layer density, source restraint, phrase awareness, groove templates, meter support (4/4, 3/4, 6/8, beat grouping), and import of all modules.
 - Add tests for new features.
 - Run with `uv run pytest`.
 - Run with `-v` for verbose output: `uv run pytest -v`.
@@ -37,6 +39,13 @@ uv run pytest
 - CLI is defined in `breaksmith/cli.py` using `argparse` with subcommands.
 - Always update `docs/CLI.md` when adding or changing CLI options.
 - Keep help text concise but descriptive — it is the primary documentation users see.
+
+## Documentation
+
+- Update `docs/CLI.md` for CLI option changes.
+- Update `docs/MUSICAL_MODEL.md` for generation pipeline or model changes.
+- Update `docs/OUTPUT_FORMATS.md` for export format changes.
+- Update `docs/TROUBLESHOOTING.md` for new common issues.
 
 ## Output Formats
 

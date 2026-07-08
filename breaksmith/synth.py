@@ -82,7 +82,7 @@ INSTRUMENT_DURATIONS = {
 
 
 def render_preview(pattern: DrumPattern, sample_rate: int = 44100, seed: int = 0) -> np.ndarray:
-    step_duration = (60.0 / pattern.bpm) * 4.0 / pattern.steps_per_bar
+    step_duration = (60.0 / pattern.bpm) * pattern.meter.primary_beats_per_bar / pattern.steps_per_bar
     total_seconds = pattern.bars * pattern.steps_per_bar * step_duration
     padding = max(INSTRUMENT_DURATIONS.values()) * 1.2
     total_samples = max(1, round((total_seconds + padding) * sample_rate))

@@ -20,6 +20,8 @@ usage: breaksmith analyze [-h] [--output OUTPUT] [--bpm BPM]
                           [--grid-start GRID_START]
                           [--downbeat-start DOWNBEAT_START]
                           [--render-click] [--features-csv FEATURES_CSV]
+                          [--time-signature {3/4,4/4,6/8}]
+                          [--beat-grouping BEAT_GROUPING]
                           source
 ```
 
@@ -68,20 +70,33 @@ Use these to verify that the detected grid aligns with the source.
 Write step-level feature maps (onset, low, high, energy, silence, brightness, sustain, flux) as CSV. Each row is one step across the entire source duration.
 - **Example**: `--features-csv features.csv`
 
+#### `--time-signature {3/4,4/4,6/8}`
+Time signature / meter for grid setup. Affects step count per bar, beat grouping, click track downbeats, and MIDI time signature meta event.
+- **Default**: `4/4`
+- **Example**: `--time-signature 6/8`
+
+#### `--beat-grouping BEAT_GROUPING`
+Beat grouping override for accent placement. Expressed as a sum (e.g., `3+3` for two groups of 3 in 6/8). When omitted, the default grouping follows the meter (1+1+1+1 for 4/4, 1+1+1 for 3/4, 3+3 for 6/8).
+- **Default**: follows meter
+- **Example**: `--beat-grouping 2+4` (group 6/8 as a duple feel instead of default 3+3)
+
 ## `breaksmith generate`
 
 Analyze audio and generate drum patterns.
 
 ```
-usage: breaksmith generate [-h] [--output-base OUTPUT_BASE]
+usage: breaksmith generate [-h] [--output OUTPUT]
                            [--style STYLE] [--genre GENRE]
-                           [--structure STRUCTURE] [--bars BARS]
-                           [--density DENSITY] [--variation VARIATION]
-                           [--swing SWING] [--humanize HUMANIZE]
                            [--seed SEED] [--variants VARIANTS]
-                           [--source-restraint SOURCE_RESTRAINT]
+                           [--bpm BPM] [--steps-per-bar STEPS_PER_BAR]
+                           [--grid-start GRID_START]
+                           [--downbeat-start DOWNBEAT_START]
+                           [--bars BARS] [--structure STRUCTURE]
+                           [--density DENSITY] [--swing SWING]
+                           [--humanize HUMANIZE] [--variation VARIATION]
                            [--phrase-awareness PHRASE_AWARENESS]
                            [--groove GROOVE]
+                           [--source-restraint SOURCE_RESTRAINT]
                            [--kick-density KICK_DENSITY]
                            [--snare-density SNARE_DENSITY]
                            [--hat-density HAT_DENSITY]
@@ -90,6 +105,8 @@ usage: breaksmith generate [-h] [--output-base OUTPUT_BASE]
                            [--midi-velocity-curve MIDI_VELOCITY_CURVE]
                            [--preview] [--preview-bars PREVIEW_BARS]
                            [--preview-comparison]
+                           [--time-signature {3/4,4/4,6/8}]
+                           [--beat-grouping BEAT_GROUPING]
                            source
 ```
 
@@ -101,10 +118,10 @@ usage: breaksmith generate [-h] [--output-base OUTPUT_BASE]
 
 ### General Options
 
-#### `--output-base OUTPUT_BASE`
+#### `--output OUTPUT`
 Base output directory. A subdirectory is created for each style (and each variant).
 - **Default**: `output`
-- **Example**: `--output-base my-beats`
+- **Example**: `--output my-beats`
 
 #### `--style STYLE`
 Generation style within the genre. Use `all` to generate all styles for the genre.
@@ -128,6 +145,18 @@ Arrangement structure.
 Number of bars to generate. Must be at least 1. If not provided, matches the source length.
 - **Type**: positive int
 - **Example**: `--bars 8`
+
+### Meter Options
+
+#### `--time-signature {3/4,4/4,6/8}`
+Time signature / meter. Affects step count (16 for 4/4, 12 for 3/4, 12 for 6/8), beat grouping, and MIDI time signature meta event.
+- **Default**: `4/4`
+- **Example**: `--time-signature 3/4`
+
+#### `--beat-grouping BEAT_GROUPING`
+Beat grouping override for accent placement within each bar. Expressed as a sum (e.g., `3+3`). When omitted, the default follows the meter.
+- **Default**: follows meter
+- **Example**: `--beat-grouping 2+4` (group 6/8 beats as 2+4 instead of default 3+3)
 
 ### Pattern Controls
 
@@ -290,6 +319,7 @@ uv run breaksmith generate "path/to/loop.wav" \
   --kick-density 0.8 \
   --hat-density 1.2 \
   --midi-velocity-curve compressed \
+  --time-signature 4/4 \
   --preview \
   --preview-bars 4 \
   --preview-comparison

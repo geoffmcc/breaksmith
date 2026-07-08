@@ -4,7 +4,7 @@ import random
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .models import GROOVE_PRESETS, Section
+from .models import GROOVE_PRESETS, METER_44, Meter, Section
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +23,7 @@ class GenerationControls:
     hat_density: float | None = None
     open_hat_density: float | None = None
     percussion_density: float | None = None
+    meter: Meter = METER_44
 
     def validate(self) -> None:
         for name in ("density", "humanize", "variation", "source_restraint", "phrase_awareness"):
@@ -39,6 +40,11 @@ class GenerationControls:
                 raise ValueError(f"{name} must be between 0.0 and 1.0")
         if self.groove not in GROOVE_PRESETS:
             raise ValueError(f"Unknown groove: {self.groove}")
+        template = GROOVE_PRESETS[self.groove]
+        if self.meter.display not in template.compatible_meters:
+            raise ValueError(
+                f"Groove '{self.groove}' is not compatible with {self.meter.display}"
+            )
 
 
 def _build_bar_sections(

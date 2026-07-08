@@ -49,7 +49,7 @@ uv run breaksmith analyze input.wav --bpm 172 --render-click
 This writes:
 
 ```text
-analysis-click.wav
+click.wav
 source-with-click.wav
 ```
 
@@ -64,6 +64,6 @@ Use the click render to confirm:
 
 ## Current Limitations
 
-- Downbeat and grid start are currently represented by the same timing point.
+- Downbeat and grid start have separate CLI overrides (`--grid-start`, `--downbeat-start`) but the grid timing model still uses a single timing reference internally.
 - Tempo and beat confidence are simple diagnostic scores, not a full probabilistic timing model.
 - Click renders are diagnostic WAVs only; they are not part of generated drum patterns.

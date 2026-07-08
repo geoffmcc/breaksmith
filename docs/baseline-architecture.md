@@ -1,6 +1,6 @@
 # Breaksmith Baseline Architecture
 
-This report captures the current Breaksmith architecture and musical baseline before the larger music-engine roadmap begins.
+> **Status:** Historical architecture documentation from initial development phase. The current codebase has evolved significantly since this was written — see [the README](../README.md) and [MUSICAL_MODEL.md](MUSICAL_MODEL.md) for current documentation. This document is preserved for architectural reference.
 
 ## Current Package Structure
 
@@ -56,12 +56,7 @@ Current source-aware features are stored on `AudioAnalysis` as step-level lists:
 
 The extraction process uses onset strength, STFT band averages, RMS, and percentile normalization.
 
-Limitations:
-
-- There are no low-mid, mid, brightness, flux, sustain, silence, or local-density maps yet.
-- Feature meaning and musical intent are not yet documented in machine-readable form.
-- Per-bar summaries are minimal.
-- Extreme-event robustness exists through percentile normalization but needs more targeted tests.
+The following maps were proposed but not implemented: low_mid_activity, mid_activity, transient_activity, sustain_activity, local_density, silence_activity, brightness_activity, spectral_flux, and bar-level variants. See [`source-activity-maps.md`](source-activity-maps.md) for the current state.
 
 ## Generator Architecture Baseline
 
@@ -104,11 +99,11 @@ Randomness is introduced in:
 
 Generation already handles requested bars greater than analyzed bars by cycling source activity. This prevents out-of-range access but is not yet musically planned.
 
-Musical limitations:
+Musical limitations (some addressed in later development):
 
-- Styles are more than raw probabilities, but they are not yet full grammars or template systems.
-- Drum decisions are still mostly local step decisions rather than phrase-aware event scoring.
-- Generated hits do not carry provenance, confidence, lock state, duration, or stable IDs.
+- ~~Styles are more than raw probabilities, but they are not yet full grammars or template systems.~~ Genre grammars (`GenreGrammar`) and groove templates (`GrooveTemplate`) now provide structured rhythmic frameworks.
+- ~~Drum decisions are still mostly local step decisions rather than phrase-aware event scoring.~~ Phrase awareness (`--phrase-awareness`) now modulates density, fills, and hats across each 4-bar phrase.
+- Generated hits do not carry provenance, confidence, lock state, duration, or stable IDs — still not implemented.
 
 ## Export Architecture Baseline
 
@@ -135,8 +130,8 @@ Strudel:
 
 Export limitations:
 
-- MIDI does not yet provide separate files per instrument or configurable mappings.
-- Strudel does not represent detailed swing/humanization beyond comments.
+- MIDI provides separate tracks per instrument. Configurable MIDI mappings are not yet implemented.
+- Strudel represents timing controls as comments (Strudel's own timing model handles performance).
 - Export validation is covered by tests but not centralized as a pattern validation stage.
 
 ## Current CLI Baseline
@@ -146,43 +141,27 @@ Commands:
 - `breaksmith analyze AUDIO`
 - `breaksmith generate AUDIO`
 
-Important options:
+Important options (current — see [CLI.md](CLI.md) for full list):
 
-- `--bpm`
-- `--steps-per-bar`
-- `--output`
-- `--style`
-- `--seed`
-- `--bars`
-- `--density`
-- `--swing`
-- `--humanize`
-- `--variation`
+- `--bpm`, `--steps-per-bar`, `--output`, `--style`, `--genre`, `--seed`, `--bars`
+- `--density`, `--swing`, `--humanize`, `--variation`
+- `--source-restraint`, `--phrase-awareness`, `--groove`
+- `--kick-density`, `--snare-density`, `--hat-density`, `--open-hat-density`, `--percussion-density`
+- `--midi-velocity-curve`, `--preview`, `--preview-bars`, `--preview-comparison`
+- `--variants`, `--structure`
 
 CLI limitations:
 
-- No `render`, `revise`, `inspect`, or kit commands yet.
 - There is no cache for analysis within repeated workflows.
 
-## Baseline Smoke Test
+## Phase 1 Status
 
-Using `/mnt/c/Users/geoff/Music/test.wav` with `--bpm 172`:
+The following Phase 1 features from this document have been implemented:
 
-```text
-Duration: 11.16s
-Grid fit: clean 8-bar loop
-Detected output grid: 8 bars
-```
-
-Generating `rolling` with `--bars 8` produced an 8-bar output and reported that the requested grid aligns with the analyzed source duration.
-
-The analyzer emitted:
-
-```text
-Warning: Few reliable beats were found; the grid begins at the audio start.
-```
-
-This is acceptable for the current sample but highlights why Phase 1 should add confidence reporting and click-render verification.
+- **Confidence reporting**: `tempo_confidence`, `beat_confidence`, `detected_beat_count`, and `expected_beat_count` are reported in analysis output.
+- **Click-track verification**: `--render-click` writes `click.wav` and `source-with-click.wav`.
+- **Manual grid-start and downbeat controls**: `--grid-start` and `--downbeat-start` override auto-detection.
+- **Pickup-adaptive diagnostics**: duration fit (`clean`, `small_tail`, `extra_beat`, `partial_bar`) helps identify pickup and alignment issues.
 
 ## High-Risk Areas For Refactoring
 
@@ -192,6 +171,6 @@ This is acceptable for the current sample but highlights why Phase 1 should add 
 - Generation mixes style grammar, source response, phrase behavior, random selection, and humanization in one function.
 - There is no central pattern validation stage before export.
 
-## Phase 1 Entry Criteria
+## Development History
 
-The current baseline is stable enough to begin Phase 1. The next phase should focus on timing confidence, manual grid-start/downbeat controls, pickup-aware diagnostics, and click-track renders before adding more generation complexity.
+The 12 development phases following this baseline document implemented: timing confidence reporting, manual grid/downbeat controls, click-track renders, variant generation, phrase awareness, groove templates, preview workflow (comparison, preview-bars), reproducibility metadata, and comprehensive documentation. See [ROADMAP.md](ROADMAP.md) for version history.

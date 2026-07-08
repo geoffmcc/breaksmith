@@ -4,6 +4,9 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+import soundfile as sf
+
 from .analysis import analyze_audio
 from .click import render_click_tracks
 from .exporters.json_export import write_analysis, write_feature_csv, write_pattern
@@ -234,6 +237,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Render a WAV audio preview of each generated pattern",
     )
     generate_parser.add_argument(
+        "--preview-bars",
+        type=_positive_int("preview-bars"),
+        default=None,
+        help="Number of bars for audio preview (default: full pattern bar count; shorter = faster)",
+    )
+    generate_parser.add_argument(
+        "--preview-comparison",
+        action="store_true",
+        help="Generate a single WAV with all style previews concatenated for A/B comparison",
+    )
+    generate_parser.add_argument(
         "--source-restraint",
         type=_bounded_float("source-restraint", 0.0, 1.0),
         default=None,
@@ -408,6 +422,8 @@ def _run_generate(args: argparse.Namespace) -> int:
         f"swing={controls.swing}, humanize={controls.humanize}, variation={controls.variation}"
     )
 
+    preview_arrays: list[tuple[str, np.ndarray]] = []
+
     for style in styles:
         for variant in range(args.variants):
             variant_seed = args.seed + variant
@@ -424,9 +440,48 @@ def _run_generate(args: argparse.Namespace) -> int:
             hit_count = sum(len(value) for value in pattern.hits.values())
             label = f"{style} variant {variant}" if args.variants > 1 else style
             print(f"Generated {label}: {hit_count} hits → {style_dir}")
-            if args.preview:
-                preview_path = write_preview(pattern, style_dir / "pattern-preview.wav", seed=variant_seed)
-                print(f"  Preview: {preview_path}")
+            if args.preview or args.preview_comparison:
+                if args.preview_bars is not None and args.preview_bars < pattern.bars:
+                    preview_controls = GenerationControls(
+                        density=controls.density,
+                        swing=controls.swing,
+                        humanize=controls.humanize,
+                        variation=controls.variation,
+                        source_restraint=controls.source_restraint,
+                        phrase_awareness=controls.phrase_awareness,
+                        groove=controls.groove,
+                        bars=args.preview_bars,
+                        genre=controls.genre,
+                        kick_density=controls.kick_density,
+                        snare_density=controls.snare_density,
+                        hat_density=controls.hat_density,
+                        open_hat_density=controls.open_hat_density,
+                        percussion_density=controls.percussion_density,
+                    )
+                    preview_pattern = generate_pattern(
+                        analysis, style, seed=variant_seed, controls=preview_controls, arrangement=None
+                    )
+                else:
+                    preview_pattern = pattern
+                from .synth import render_preview
+                preview_audio = render_preview(preview_pattern, seed=variant_seed)
+                if args.preview:
+                    preview_path = write_preview(preview_pattern, style_dir / "pattern-preview.wav", seed=variant_seed)
+                    print(f"  Preview: {preview_path}")
+                if args.preview_comparison:
+                    preview_arrays.append((f"{label}", preview_audio))
+
+    if args.preview_comparison and preview_arrays:
+        gap = int(0.5 * 44100)
+        segments: list[np.ndarray] = []
+        for _name, audio in preview_arrays:
+            segments.append(audio)
+            segments.append(np.zeros(gap, dtype=np.float32))
+        if segments:
+            combined = np.concatenate(segments)
+            comparison_path = output_dir / "comparison.wav"
+            sf.write(comparison_path, combined, 44100)
+            print(f"Comparison preview ({len(preview_arrays)} styles): {comparison_path}")
 
     if arrangement is not None:
         print(f"Generated {generation_bar_count} bars ({args.structure} arrangement).")

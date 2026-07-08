@@ -1,6 +1,6 @@
 # Breaksmith
 
-Breaksmith is an audio-aware breakbeat and drum-and-bass groove generator. It analyzes loops or tracks and generates editable drum arrangements as MIDI, Strudel, and JSON.
+Breaksmith is an audio-aware breakbeat, drum-and-bass, and hip-hop groove generator. It analyzes loops or tracks and generates editable drum arrangements as MIDI, Strudel, and JSON.
 
 The current system is rule-based and audio-aware: it estimates tempo, builds a beat grid, measures low/high/onset activity, and uses those features to guide drum pattern generation. Prompt-directed or model-assisted generation is a future direction, not part of the current implementation.
 
@@ -88,13 +88,36 @@ Generate with an arrangement preset and audio preview:
 uv run breaksmith generate path/to/loop.wav --structure build-drop --preview
 ```
 
-Generate with a custom velocity curve:
+Select a genre for style-specific defaults:
 
 ```bash
-uv run breaksmith generate path/to/loop.wav --midi-velocity-curve exponential
+uv run breaksmith generate input.wav --genre dnb --style liquid
+uv run breaksmith generate input.wav --genre hiphop --style boom_bap
 ```
 
+Generate multiple variants for comparison:
+
+```bash
+uv run breaksmith generate input.wav --style rolling --variants 3 --preview-comparison
+```
+
+Use a groove template for consistent feel:
+
+```bash
+uv run breaksmith generate input.wav --style liquid --groove mpc --swing 0.0
+```
+
+Generate a shorter audio preview for faster iteration:
+
+```bash
+uv run breaksmith generate input.wav --style rolling --preview --preview-bars 4
+```
+
+All output directories include `source_sha256`, `pattern_sha256`, and a full `input_manifest` in the pattern metadata for full reproducibility.
+
 ## Styles
+
+### Drum & Bass
 
 - `minimal`: sparse, clean, restrained, with strong space between hits.
 - `rolling`: continuous forward movement, syncopated kicks, active hats, restrained ghost snares.
@@ -104,15 +127,25 @@ uv run breaksmith generate path/to/loop.wav --midi-velocity-curve exponential
 - `halfstep`: half-time weight, large spaces, heavy kick and snare emphasis, sparse hats.
 - `techstep`: dark, mechanical, tight, syncopated, controlled repetition, sharper accents.
 
-Use `--style all` to generate every style, or select one style with `--style rolling`.
+### Hip-Hop
+
+- `boom_bap`: classic hip-hop with strong kick/snare relationship and snare on 2 and 4.
+- `lo_fi`: softer, swung hip-hop with loose timing and restraint.
+- `dusty`: hard but imperfect pocket with moderate swing and character.
+- `soulful`: smooth pocket with supportive dynamics and gentle phrase changes.
+- `laid_back`: minimal, spacious hip-hop with late snares and strong pocket.
+- `east_coast`: firmer boom-bap attack with tighter swing and strong snare.
+- `sparse`: very few events with strong anchors and large spaces.
+
+Use `--style all` to generate every style for the detected or specified genre.
 
 ## Generation Controls
 
 - `--bars`: generated bar count; must be a positive integer.
-- `--density`: overall hit density, `0.0` to `1.0`.
-- `--swing`: additional off-grid swing delay, `0.0` to `0.5` steps.
-- `--humanize`: random timing and velocity looseness, `0.0` to `1.0`.
-- `--variation`: random and bar-to-bar variation, `0.0` to `1.0`.
+- `--density`: overall hit density, `0.0` to `1.0` (genre-dependent default).
+- `--swing`: additional off-grid swing delay, `0.0` to `0.5` steps (genre-dependent default).
+- `--humanize`: random timing and velocity looseness, `0.0` to `1.0` (genre-dependent default).
+- `--variation`: random and bar-to-bar variation, `0.0` to `1.0` (genre-dependent default).
 - `--seed`: deterministic random seed.
 - `--bpm`: tempo override.
 - `--grid-start`: manual grid start in seconds.
@@ -120,10 +153,32 @@ Use `--style all` to generate every style, or select one style with `--style rol
 - `--steps-per-bar`: grid resolution; must be a positive multiple of four.
 - `--features-csv`: write step-level source activity maps for diagnostics.
 - `--preview`: render a WAV audio preview of each generated pattern (requires FFmpeg).
-- `--structure`: section arrangement preset (`short`, `medium`, `full`, `build-drop`, `minimal`, or a custom bar-per-section spec).
+- `--preview-bars`: bar count for the audio preview (defaults to full pattern; shorter = faster).
+- `--preview-comparison`: generate a single WAV with all style previews concatenated for A/B comparison.
+- `--structure`: section arrangement preset (`short`, `build-drop`, `minimal`).
 - `--midi-velocity-curve`: velocity mapping curve (`linear`, `exponential`, `compressed`, or `hard`).
 
-The same audio analysis, style, controls, and seed should produce deterministic output.
+### Genre & Style
+
+- `--genre`: genre context (`dnb` or `hiphop`); sets style-specific defaults for density, swing, humanize, variation, and source restraint.
+- `--style`: drum style name or `all` to generate every style for the genre.
+
+### Advanced Controls
+
+- `--source-restraint`: modulate density by source bar energy, `0.0` to `1.0` (0 = ignore source, 1 = fully follow source). Hip-hop defaults to 0.3.
+- `--phrase-awareness`: how strongly phrase position modulates density, `0.0` to `1.0` (default 0.3). Bars near phrase boundaries get subtle density and variation shifts.
+- `--groove`: structured timing template (`straight`, `mpc`, `laid_back`, `pushed`, `shuffled`). Adds consistent per-step timing offsets on top of swing and humanization.
+- `--variants`: number of variant patterns to generate (default 1). Each variant uses `seed + variant_index` and writes to a `variant_N` subdirectory.
+
+### Per-Layer Density
+
+- `--kick-density`: density multiplier for kicks, `0.0` to `1.0`.
+- `--snare-density`: density multiplier for snares, `0.0` to `1.0`.
+- `--hat-density`: density multiplier for closed hats, `0.0` to `1.0`.
+- `--open-hat-density`: density multiplier for open hats, `0.0` to `1.0`.
+- `--percussion-density`: density multiplier for percussion, `0.0` to `1.0`.
+
+The same audio analysis, style, controls, and seed should produce deterministic output. Each pattern JSON includes `source_sha256`, `pattern_sha256`, and `input_manifest` for reproducibility verification.
 
 ## Output
 
@@ -133,13 +188,17 @@ output/
 ├── minimal/
 │   ├── pattern.json
 │   ├── pattern.mid
-│   └── pattern.strudel.js
+│   ├── pattern.strudel.js
+│   └── pattern-preview.wav       # with --preview
 ├── rolling/
 ├── aggressive/
-├── liquid/
-├── jungle/
-├── halfstep/
-└── techstep/
+├── ...
+├── comparison.wav                  # with --preview-comparison
+└── rolling/
+    └── variant_0/                  # with --variants 3
+        ├── pattern.json
+        ├── pattern.mid
+        └── pattern.strudel.js
 ```
 
 JSON preserves the logical grid and includes per-hit `timing_offset_steps` when swing or humanization is applied. MIDI renders those timing offsets as tick offsets while keeping events ordered; it also writes per-instrument note lengths, note-off release velocities, groove feel markers, and section markers. Strudel output keeps the pattern readable on the logical grid and documents the timing controls in comments rather than emitting complex timing transforms.

@@ -202,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Render a WAV audio preview of each generated pattern",
     )
+    generate_parser.add_argument(
+        "--midi-velocity-curve",
+        choices=["linear", "exponential", "compressed", "hard"],
+        default="linear",
+        help="Velocity curve shape for MIDI note velocities",
+    )
 
     return parser
 
@@ -320,7 +326,7 @@ def _run_generate(args: argparse.Namespace) -> int:
         )
         style_dir = ensure_output_dir(output_dir / style)
         write_pattern(pattern, style_dir / "pattern.json")
-        write_midi(pattern, style_dir / "pattern.mid")
+        write_midi(pattern, style_dir / "pattern.mid", velocity_curve=args.midi_velocity_curve)
         write_strudel(pattern, style_dir / "pattern.strudel.js")
         hit_count = sum(len(value) for value in pattern.hits.values())
         print(f"Generated {style}: {hit_count} hits → {style_dir}")

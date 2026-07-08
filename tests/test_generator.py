@@ -387,6 +387,110 @@ def test_midi_export_has_no_events_outside_requested_bars(tmp_path: Path) -> Non
             assert absolute <= end_tick
 
 
+def test_midi_velocity_curve_exponential_reduces_low_velocities(tmp_path: Path) -> None:
+    pattern = generate_pattern(fake_analysis(), "rolling", seed=42)
+    output = tmp_path / "linear.mid"
+    write_midi(pattern, output, velocity_curve="linear")
+    linear_midi = MidiFile(output)
+    output2 = tmp_path / "exponential.mid"
+    write_midi(pattern, output2, velocity_curve="exponential")
+    exp_midi = MidiFile(output2)
+    linear_vels = []
+    exp_vels = []
+    for track in linear_midi.tracks:
+        for msg in track:
+            if msg.type == "note_on":
+                linear_vels.append(msg.velocity)
+    for track in exp_midi.tracks:
+        for msg in track:
+            if msg.type == "note_on":
+                exp_vels.append(msg.velocity)
+    assert len(exp_vels) == len(linear_vels)
+    assert sum(exp_vels) < sum(linear_vels)
+
+
+def test_midi_export_has_note_off_velocities(tmp_path: Path) -> None:
+    pattern = generate_pattern(fake_analysis(), "minimal", seed=42)
+    output = tmp_path / "pattern.mid"
+    write_midi(pattern, output)
+    midi = MidiFile(output)
+    note_off_velocities = []
+    for track in midi.tracks:
+        for msg in track:
+            if msg.type == "note_off":
+                note_off_velocities.append(msg.velocity)
+    assert all(vel > 0 for vel in note_off_velocities)
+
+
+def test_midi_export_has_groove_marker(tmp_path: Path) -> None:
+    pattern = generate_pattern(fake_analysis(), "jungle", seed=42)
+    output = tmp_path / "pattern.mid"
+    write_midi(pattern, output)
+    midi = MidiFile(output)
+    markers = []
+    for track in midi.tracks:
+        for msg in track:
+            if msg.type == "marker":
+                markers.append(msg.text)
+    assert any("groove" in m for m in markers)
+    assert any("shuffled" in m for m in markers)
+
+
+def test_midi_velocity_curve_hard_increases_loud_velocities(tmp_path: Path) -> None:
+    pattern = generate_pattern(fake_analysis(), "aggressive", seed=42)
+    output = tmp_path / "linear.mid"
+    write_midi(pattern, output, velocity_curve="linear")
+    linear_midi = MidiFile(output)
+    output2 = tmp_path / "hard.mid"
+    write_midi(pattern, output2, velocity_curve="hard")
+    hard_midi = MidiFile(output2)
+    linear_max = 0
+    hard_max = 0
+    for track in linear_midi.tracks:
+        for msg in track:
+            if msg.type == "note_on" and msg.velocity > linear_max:
+                linear_max = msg.velocity
+    for track in hard_midi.tracks:
+        for msg in track:
+            if msg.type == "note_on" and msg.velocity > hard_max:
+                hard_max = msg.velocity
+    assert hard_max >= linear_max
+
+
+def test_midi_with_velocity_curve_from_cli(monkeypatch, tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.source = str(tmp_path / "source.wav")
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    source = tmp_path / "source.wav"
+    sf.write(source, np.zeros(4000, dtype=np.float32), 4000)
+    args = SimpleNamespace(
+        audio=source,
+        output=tmp_path / "output",
+        bpm=172.0,
+        steps_per_bar=16,
+        style="rolling",
+        seed=42,
+        bars=2,
+        density=0.5,
+        swing=0.0,
+        humanize=0.0,
+        variation=0.25,
+        grid_start=None,
+        downbeat_start=None,
+        preview=False,
+        structure=None,
+        midi_velocity_curve="exponential",
+    )
+    assert cli._run_generate(args) == 0
+    midi_path = tmp_path / "output" / "rolling" / "pattern.mid"
+    assert midi_path.exists()
+    midi = MidiFile(midi_path)
+    note_on_count = sum(
+        1 for track in midi.tracks for msg in track if msg.type == "note_on"
+    )
+    assert note_on_count > 0
+
+
 def test_strudel_export_contains_breaksmith_branding(tmp_path: Path) -> None:
     pattern = generate_pattern(fake_analysis(), "liquid", seed=42)
     output = tmp_path / "pattern.strudel.js"
@@ -581,6 +685,7 @@ def test_generate_output_suggests_bars_for_extra_beat_source(
         downbeat_start=None,
         preview=False,
         structure=None,
+        midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -608,6 +713,7 @@ def test_generate_output_reports_exact_requested_bars(monkeypatch, capsys, tmp_p
         downbeat_start=None,
         preview=False,
         structure=None,
+        midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -714,6 +820,7 @@ def test_generate_with_preview_writes_wav(monkeypatch, tmp_path: Path) -> None:
         downbeat_start=None,
         preview=True,
         structure=None,
+        midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
     preview = tmp_path / "output" / "rolling" / "pattern-preview.wav"
@@ -745,6 +852,7 @@ def test_generate_preview_matches_render_preview(monkeypatch, tmp_path: Path) ->
         downbeat_start=None,
         preview=True,
         structure=None,
+        midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
     preview_path = tmp_path / "output" / "rolling" / "pattern-preview.wav"
@@ -817,6 +925,7 @@ def test_generate_with_structure_cli_flag(monkeypatch, capsys, tmp_path: Path) -
         downbeat_start=None,
         preview=False,
         structure="short",
+        midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -847,6 +956,7 @@ def test_generate_with_structure_overrides_bars(monkeypatch, capsys, tmp_path: P
         downbeat_start=None,
         preview=False,
         structure="minimal",
+        midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
     captured = capsys.readouterr()
@@ -863,7 +973,7 @@ def test_no_stale_branding_in_active_source_files() -> None:
     for path in root.rglob("*"):
         if path.is_dir() or path.suffix not in checked_suffixes:
             continue
-        if any(part in {".venv", ".git", "output", "__pycache__"} for part in path.parts):
+        if any(part in {".venv", ".venv2", ".git", "output", "__pycache__"} for part in path.parts):
             continue
         text = path.read_text(encoding="utf-8")
         if any(term in text for term in stale_terms):

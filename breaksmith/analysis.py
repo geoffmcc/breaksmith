@@ -203,7 +203,9 @@ def extract_activity_maps(
     }
     rounded["bar_energy"] = _bar_means(rms_steps, steps_per_bar)
     rounded["bar_density"] = _bar_means(np.asarray(rounded["local_density"]), steps_per_bar)
-    rounded["bar_brightness"] = _bar_means(np.asarray(rounded["brightness_activity"]), steps_per_bar)
+    rounded["bar_brightness"] = _bar_means(
+        np.asarray(rounded["brightness_activity"]), steps_per_bar
+    )
     rounded["bar_silence"] = _bar_means(np.asarray(rounded["silence_activity"]), steps_per_bar)
     return rounded
 

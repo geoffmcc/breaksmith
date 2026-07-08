@@ -21,6 +21,14 @@ from breaksmith.exporters.midi import write_midi
 from breaksmith.exporters.strudel import write_strudel
 from breaksmith.generator import STYLE_PRESETS, GenerationControls, generate_pattern
 from breaksmith.models import AudioAnalysis
+from breaksmith.synth import (
+    INSTRUMENT_DURATIONS,
+    INSTRUMENT_RENDERERS,
+    render_kick,
+    render_percussion,
+    render_preview,
+    write_preview,
+)
 
 
 def fake_analysis() -> AudioAnalysis:
@@ -35,7 +43,10 @@ def fake_analysis() -> AudioAnalysis:
         steps_per_bar=16,
         step_times=[index * 0.0872 for index in range(steps)],
         onset_activity=[0.2 + (0.6 if index % 5 == 0 else 0.0) for index in range(steps)],
-        low_activity=[0.15 + (0.75 if index in {0, 6, 16, 26, 32, 42, 48, 58} else 0.0) for index in range(steps)],
+        low_activity=[
+            0.15 + (0.75 if index in {0, 6, 16, 26, 32, 42, 48, 58} else 0.0)
+            for index in range(steps)
+        ],
         high_activity=[0.35 + (0.35 if index % 2 == 0 else 0.0) for index in range(steps)],
         bar_energy=[0.35, 0.55, 0.70, 0.45],
         grid_start_seconds=0.0,
@@ -232,7 +243,9 @@ def test_different_seeds_change_output_when_variation_is_enabled() -> None:
     assert left != right
 
 
-@pytest.mark.parametrize("style", ["minimal", "rolling", "aggressive", "liquid", "jungle", "techstep"])
+@pytest.mark.parametrize(
+    "style", ["minimal", "rolling", "aggressive", "liquid", "jungle", "techstep"]
+)
 def test_required_dnb_snares_exist(style: str) -> None:
     pattern = generate_pattern(fake_analysis(), style, seed=42)
     positions = {(hit.bar, hit.step) for hit in pattern.hits["snare"]}
@@ -282,7 +295,9 @@ def test_cli_rejects_invalid_parameter() -> None:
 
 
 def test_requested_bar_count_is_respected() -> None:
-    pattern = generate_pattern(fake_analysis(), "rolling", seed=42, controls=GenerationControls(bars=8))
+    pattern = generate_pattern(
+        fake_analysis(), "rolling", seed=42, controls=GenerationControls(bars=8)
+    )
     assert pattern.bars == 8
     assert all(hit.bar < 8 for hits in pattern.hits.values() for hit in hits)
 
@@ -403,7 +418,9 @@ def test_cli_rejects_negative_grid_overrides(option: str) -> None:
 
 
 def test_requesting_more_bars_than_source_does_not_crash() -> None:
-    pattern = generate_pattern(fake_analysis(), "rolling", seed=42, controls=GenerationControls(bars=12))
+    pattern = generate_pattern(
+        fake_analysis(), "rolling", seed=42, controls=GenerationControls(bars=12)
+    )
     assert pattern.bars == 12
     assert pattern.metadata["source_activity_strategy"].startswith("cycle analyzed")
 
@@ -557,6 +574,7 @@ def test_generate_output_suggests_bars_for_extra_beat_source(
         variation=0.25,
         grid_start=None,
         downbeat_start=None,
+        preview=False,
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -582,6 +600,7 @@ def test_generate_output_reports_exact_requested_bars(monkeypatch, capsys, tmp_p
         variation=0.25,
         grid_start=None,
         downbeat_start=None,
+        preview=False,
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
@@ -609,6 +628,118 @@ def test_render_click_tracks_places_clicks_at_grid_positions(tmp_path: Path) -> 
     assert np.max(np.abs(click[950:1100])) > 0.1
     assert np.max(np.abs(click[2950:3100])) > 0.1
     assert np.max(np.abs(click[:800])) == pytest.approx(0.0)
+
+
+def test_all_synth_renderers_return_correct_length() -> None:
+    sample_rate = 44100
+    for name, renderer in INSTRUMENT_RENDERERS.items():
+        duration = INSTRUMENT_DURATIONS[name]
+        sound = renderer(sample_rate, duration, seed=42)
+        expected = max(1, round(sample_rate * duration))
+        assert len(sound) == expected, f"{name}: expected {expected}, got {len(sound)}"
+
+
+def test_all_synth_renderers_produce_nonzero_audio() -> None:
+    for name, renderer in INSTRUMENT_RENDERERS.items():
+        sound = renderer(44100, INSTRUMENT_DURATIONS[name], seed=42)
+        assert np.max(np.abs(sound)) > 0.01, f"{name} produced silence"
+
+
+@pytest.mark.parametrize("renderer", [render_kick, render_percussion])
+def test_tonal_synth_has_audible_frequency_content(renderer) -> None:
+    sound = renderer(44100, 0.1, seed=42)
+    spectrum = np.abs(np.fft.rfft(sound))
+    lower = spectrum[: len(spectrum) // 4]
+    upper = spectrum[len(spectrum) // 4 :]
+    assert np.sum(lower) > np.sum(upper), f"{renderer.__name__} lacks low-end content"
+
+
+def test_render_preview_returns_correct_length() -> None:
+    pattern = generate_pattern(fake_analysis(), "rolling", seed=42)
+    sr = 22050
+    audio = render_preview(pattern, sample_rate=sr, seed=42)
+    step_dur = (60.0 / pattern.bpm) * 4.0 / pattern.steps_per_bar
+    expected_seconds = pattern.bars * pattern.steps_per_bar * step_dur
+    padding = max(INSTRUMENT_DURATIONS.values()) * 1.2
+    expected_samples = max(1, round((expected_seconds + padding) * sr))
+    assert len(audio) == expected_samples
+
+
+def test_render_preview_produces_audible_output() -> None:
+    pattern = generate_pattern(
+        fake_analysis(), "aggressive", seed=42, controls=GenerationControls(density=1.0)
+    )
+    audio = render_preview(pattern, sample_rate=22050, seed=42)
+    assert np.max(np.abs(audio)) > 0.01
+
+
+def test_write_preview_creates_valid_wav(tmp_path: Path) -> None:
+    pattern = generate_pattern(fake_analysis(), "liquid", seed=42)
+    output = tmp_path / "preview.wav"
+    result = write_preview(pattern, output, seed=42)
+    assert result == output
+    assert output.exists()
+    data, sr = sf.read(output, dtype="float32")
+    assert sr == 44100
+    assert len(data) > 0
+    assert np.max(np.abs(data)) > 0.0
+
+
+def test_generate_with_preview_writes_wav(monkeypatch, tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.source = str(tmp_path / "source.wav")
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    source = tmp_path / "source.wav"
+    sf.write(source, np.zeros(4000, dtype=np.float32), 4000)
+    args = SimpleNamespace(
+        audio=source,
+        output=tmp_path / "output",
+        bpm=172.0,
+        steps_per_bar=16,
+        style="rolling",
+        seed=42,
+        bars=2,
+        density=0.5,
+        swing=0.0,
+        humanize=0.0,
+        variation=0.25,
+        grid_start=None,
+        downbeat_start=None,
+        preview=True,
+    )
+    assert cli._run_generate(args) == 0
+    preview = tmp_path / "output" / "rolling" / "pattern-preview.wav"
+    assert preview.exists()
+    data, sr = sf.read(preview, dtype="float32")
+    assert sr == 44100
+    assert len(data) > 0
+
+
+def test_generate_preview_matches_render_preview(monkeypatch, tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.source = str(tmp_path / "source.wav")
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    source = tmp_path / "source.wav"
+    sf.write(source, np.zeros(4000, dtype=np.float32), 4000)
+    args = SimpleNamespace(
+        audio=source,
+        output=tmp_path / "output",
+        bpm=172.0,
+        steps_per_bar=16,
+        style="rolling",
+        seed=42,
+        bars=2,
+        density=0.5,
+        swing=0.0,
+        humanize=0.0,
+        variation=0.25,
+        grid_start=None,
+        downbeat_start=None,
+        preview=True,
+    )
+    assert cli._run_generate(args) == 0
+    preview_path = tmp_path / "output" / "rolling" / "pattern-preview.wav"
+    assert preview_path.exists()
 
 
 def test_no_stale_branding_in_active_source_files() -> None:

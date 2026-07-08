@@ -15,12 +15,10 @@ SOUNDS = {
 
 
 def _bar_tokens(pattern: DrumPattern, instrument: str, bar: int) -> str:
-    by_step = {
-        hit.step: hit
-        for hit in pattern.hits.get(instrument, [])
-        if hit.bar == bar
-    }
-    return " ".join(SOUNDS[instrument] if step in by_step else "~" for step in range(pattern.steps_per_bar))
+    by_step = {hit.step: hit for hit in pattern.hits.get(instrument, []) if hit.bar == bar}
+    return " ".join(
+        SOUNDS[instrument] if step in by_step else "~" for step in range(pattern.steps_per_bar)
+    )
 
 
 def _pattern_string(pattern: DrumPattern, instrument: str) -> str:

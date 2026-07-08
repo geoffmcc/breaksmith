@@ -8,7 +8,9 @@ import soundfile as sf
 from .models import AudioAnalysis
 
 
-def _click_pulse(sample_rate: int, frequency: float, duration: float, amplitude: float) -> np.ndarray:
+def _click_pulse(
+    sample_rate: int, frequency: float, duration: float, amplitude: float
+) -> np.ndarray:
     length = max(1, round(sample_rate * duration))
     t = np.arange(length, dtype=float) / sample_rate
     envelope = np.exp(-t * 70.0)

@@ -99,7 +99,9 @@ STYLE_PRESETS: dict[str, StylePreset] = {
         percussion_density=0.26,
         swing_amount=0.025,
         activity_response=0.82,
-        velocities=VelocityRanges((108, 127), (106, 127), (34, 67), (48, 108), (62, 104), (48, 108)),
+        velocities=VelocityRanges(
+            (108, 127), (106, 127), (34, 67), (48, 108), (62, 104), (48, 108)
+        ),
     ),
     "liquid": StylePreset(
         name="liquid",
@@ -183,7 +185,9 @@ def _step_from_fraction(steps: int, fraction: float) -> int:
     return max(0, min(steps - 1, round(steps * fraction)))
 
 
-def _timing_offset(step: int, controls: GenerationControls, preset: StylePreset, rng: random.Random) -> float:
+def _timing_offset(
+    step: int, controls: GenerationControls, preset: StylePreset, rng: random.Random
+) -> float:
     swing = min(0.5, controls.swing + preset.swing_amount)
     offset = swing if step % 2 == 1 else 0.0
     if controls.humanize:
@@ -215,7 +219,9 @@ def _add_hit(
             existing.velocity = max(existing.velocity, velocity)
             existing.timing_offset_steps = timing_offset
             return
-    hits[instrument].append(Hit(bar=bar, step=step, velocity=velocity, timing_offset_steps=timing_offset))
+    hits[instrument].append(
+        Hit(bar=bar, step=step, velocity=velocity, timing_offset_steps=timing_offset)
+    )
 
 
 def generate_pattern(
@@ -267,8 +273,11 @@ def generate_pattern(
             rng,
         )
 
-        forbidden = {_step_from_fraction(steps, fraction) for fraction in preset.required_snare_steps} | {
-            (_step_from_fraction(steps, fraction) - 1) % steps for fraction in preset.required_snare_steps
+        forbidden = {
+            _step_from_fraction(steps, fraction) for fraction in preset.required_snare_steps
+        } | {
+            (_step_from_fraction(steps, fraction) - 1) % steps
+            for fraction in preset.required_snare_steps
         }
         kick_candidates: list[tuple[float, int]] = []
         for step in range(1, steps):
@@ -328,7 +337,9 @@ def generate_pattern(
             if preset.mechanical_bias and step % 2 == 1:
                 probability *= 0.58
             if accent or rng.random() < min(0.96, probability):
-                base_activity = max(_activity(analysis.high_activity, index), 0.45 if accent else 0.0)
+                base_activity = max(
+                    _activity(analysis.high_activity, index), 0.45 if accent else 0.0
+                )
                 _add_hit(
                     hits,
                     "closed_hat",
@@ -384,7 +395,10 @@ def generate_pattern(
                     "percussion",
                     bar,
                     step,
-                    _velocity(_activity(analysis.high_activity, offset + step), *preset.velocities.percussion),
+                    _velocity(
+                        _activity(analysis.high_activity, offset + step),
+                        *preset.velocities.percussion,
+                    ),
                     controls,
                     preset,
                     rng,

@@ -11,6 +11,7 @@ from .exporters.midi import write_midi
 from .exporters.strudel import write_strudel
 from .generator import STYLE_CONFIG, GenerationControls, generate_pattern
 from .models import AudioAnalysis, ensure_output_dir
+from .synth import write_preview
 
 
 def _positive_bpm(value: str) -> float:
@@ -185,6 +186,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.25,
         help="Bar-to-bar/random variation from 0.0 to 1.0",
     )
+    generate_parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Render a WAV audio preview of each generated pattern",
+    )
 
     return parser
 
@@ -269,9 +275,7 @@ def _run_generate(args: argparse.Namespace) -> int:
         remainder = analysis.effective_duration_seconds - requested_duration
         print(f"Requested grid: {controls.bars} bars")
         if remainder > analysis.step_duration_seconds * 0.25:
-            print(
-                f"Ignoring {remainder:.2f}s of source audio beyond the requested grid boundary."
-            )
+            print(f"Ignoring {remainder:.2f}s of source audio beyond the requested grid boundary.")
         elif remainder < -analysis.step_duration_seconds * 0.25:
             print(
                 f"Requested grid extends {abs(remainder):.2f}s beyond the analyzed source audio; "
@@ -293,6 +297,9 @@ def _run_generate(args: argparse.Namespace) -> int:
         write_strudel(pattern, style_dir / "pattern.strudel.js")
         hit_count = sum(len(value) for value in pattern.hits.values())
         print(f"Generated {style}: {hit_count} hits → {style_dir}")
+        if args.preview:
+            preview_path = write_preview(pattern, style_dir / "pattern-preview.wav", seed=args.seed)
+            print(f"  Preview: {preview_path}")
 
     if controls.bars is not None:
         print(f"Generated exactly {controls.bars} bars.")

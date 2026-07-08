@@ -20,6 +20,26 @@ STYLE_GENRE_MAP: dict[str, str] = {
 
 ALL_STYLES = DNB_STYLES + HIPHOP_STYLES
 
+DEFAULT_STYLE_PER_GENRE: dict[str, str] = {
+    "dnb": "minimal",
+    "hiphop": "boom_bap",
+}
+
+GENRE_CONTROL_DEFAULTS: dict[str, dict[str, float]] = {
+    "dnb": {
+        "density": 0.5,
+        "swing": 0.0,
+        "humanize": 0.0,
+        "variation": 0.25,
+    },
+    "hiphop": {
+        "density": 0.35,
+        "swing": 0.12,
+        "humanize": 0.15,
+        "variation": 0.30,
+    },
+}
+
 
 def resolve_genre(style: str, genre: str | None = None) -> str:
     if genre is not None:

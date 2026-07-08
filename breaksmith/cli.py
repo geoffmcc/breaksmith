@@ -14,6 +14,8 @@ from .models import (
     ALL_STYLES,
     ARRANGEMENT_PRESETS,
     AudioAnalysis,
+    DEFAULT_STYLE_PER_GENRE,
+    GENRE_CONTROL_DEFAULTS,
     GENRES,
     HIPHOP_STYLES,
     Section,
@@ -186,26 +188,26 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser.add_argument(
         "--density",
         type=_bounded_float("density", 0.0, 1.0),
-        default=0.5,
-        help="Overall hit density from 0.0 to 1.0",
+        default=None,
+        help="Overall hit density from 0.0 to 1.0 (genre-dependent default)",
     )
     generate_parser.add_argument(
         "--swing",
         type=_bounded_float("swing", 0.0, 0.5),
-        default=0.0,
-        help="Additional off-grid swing delay in steps from 0.0 to 0.5",
+        default=None,
+        help="Additional off-grid swing delay in steps from 0.0 to 0.5 (genre-dependent default)",
     )
     generate_parser.add_argument(
         "--humanize",
         type=_bounded_float("humanize", 0.0, 1.0),
-        default=0.0,
-        help="Random timing and velocity looseness from 0.0 to 1.0",
+        default=None,
+        help="Random timing and velocity looseness from 0.0 to 1.0 (genre-dependent default)",
     )
     generate_parser.add_argument(
         "--variation",
         type=_bounded_float("variation", 0.0, 1.0),
-        default=0.25,
-        help="Bar-to-bar/random variation from 0.0 to 1.0",
+        default=None,
+        help="Bar-to-bar/random variation from 0.0 to 1.0 (genre-dependent default)",
     )
     generate_parser.add_argument(
         "--preview",
@@ -275,15 +277,17 @@ def _run_generate(args: argparse.Namespace) -> int:
     else:
         effective_bars = args.bars or analysis.bar_count
 
-    genre = resolve_genre(style=args.style if args.style != "all" else "minimal", genre=args.genre)
+    fallback_style = DEFAULT_STYLE_PER_GENRE.get(args.genre) if args.genre else "minimal"
+    genre = resolve_genre(style=args.style if args.style != "all" else fallback_style, genre=args.genre)
     if args.style != "all":
         validate_style_genre(args.style, genre)
 
+    genre_defaults = GENRE_CONTROL_DEFAULTS.get(genre, {})
     controls = GenerationControls(
-        density=args.density,
-        swing=args.swing,
-        humanize=args.humanize,
-        variation=args.variation,
+        density=args.density if args.density is not None else genre_defaults.get("density", 0.5),
+        swing=args.swing if args.swing is not None else genre_defaults.get("swing", 0.0),
+        humanize=args.humanize if args.humanize is not None else genre_defaults.get("humanize", 0.0),
+        variation=args.variation if args.variation is not None else genre_defaults.get("variation", 0.25),
         bars=effective_bars,
         genre=genre,
     )

@@ -4,7 +4,7 @@ import random
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .models import Section
+from .models import GROOVE_PRESETS, Section
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +15,7 @@ class GenerationControls:
     variation: float = 0.25
     source_restraint: float = 0.0
     phrase_awareness: float = 0.3
+    groove: str = "straight"
     bars: int | None = None
     genre: str | None = None
     kick_density: float | None = None
@@ -36,6 +37,8 @@ class GenerationControls:
             value = getattr(self, name)
             if value is not None and not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be between 0.0 and 1.0")
+        if self.groove not in GROOVE_PRESETS:
+            raise ValueError(f"Unknown groove: {self.groove}")
 
 
 def _build_bar_sections(
@@ -98,3 +101,14 @@ def _humanized_velocity(velocity: int, humanize: float, rng: random.Random) -> i
         return velocity
     delta = round(rng.uniform(-10, 10) * humanize)
     return max(1, min(127, velocity + delta))
+
+
+def groove_timing_offset(groove: str, steps_per_bar: int, step: int) -> float:
+    template = GROOVE_PRESETS.get(groove)
+    if template is None or not template.timing_offsets:
+        return 0.0
+    off_len = len(template.timing_offsets)
+    if off_len == 0:
+        return 0.0
+    idx = step % off_len
+    return template.timing_offsets[idx]

@@ -17,6 +17,7 @@ from .models import (
     DEFAULT_STYLE_PER_GENRE,
     GENRE_CONTROL_DEFAULTS,
     GENRES,
+    GROOVE_PRESETS,
     HIPHOP_STYLES,
     Section,
     arrangement_bar_count,
@@ -222,6 +223,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="How strongly phrase position modulates density from 0.0 (off) to 1.0 (full curve)",
     )
     generate_parser.add_argument(
+        "--groove",
+        choices=[*GROOVE_PRESETS],
+        default="straight",
+        help="Structured timing groove template for consistent per-step feel",
+    )
+    generate_parser.add_argument(
         "--preview",
         action="store_true",
         help="Render a WAV audio preview of each generated pattern",
@@ -338,6 +345,7 @@ def _run_generate(args: argparse.Namespace) -> int:
         variation=args.variation if args.variation is not None else genre_defaults.get("variation", 0.25),
         source_restraint=args.source_restraint if args.source_restraint is not None else genre_defaults.get("source_restraint", 0.0),
         phrase_awareness=args.phrase_awareness,
+        groove=args.groove,
         bars=effective_bars,
         genre=genre,
         kick_density=args.kick_density,

@@ -381,3 +381,59 @@ def arrangement_bar_count(arrangement: Sequence[Section]) -> int:
 def ensure_output_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+@dataclass(frozen=True, slots=True)
+class GrooveTemplate:
+    name: str
+    description: str
+    timing_offsets: tuple[float, ...]
+
+
+GROOVE_PRESETS: dict[str, GrooveTemplate] = {
+    "straight": GrooveTemplate(
+        name="straight",
+        description="No groove offset; all steps on the grid.",
+        timing_offsets=(),
+    ),
+    "mpc": GrooveTemplate(
+        name="mpc",
+        description="Classic MPC 16-level swing: off-beat 16ths pushed slightly late.",
+        timing_offsets=(
+            0.000, 0.000, 0.014, 0.000,
+            0.000, 0.000, 0.014, 0.000,
+            0.000, 0.000, 0.014, 0.000,
+            0.000, 0.000, 0.014, 0.000,
+        ),
+    ),
+    "laid_back": GrooveTemplate(
+        name="laid_back",
+        description="Relaxed feel: off-beats consistently late.",
+        timing_offsets=(
+            0.000, 0.018, 0.000, 0.022,
+            0.000, 0.018, 0.000, 0.022,
+            0.000, 0.018, 0.000, 0.022,
+            0.000, 0.018, 0.000, 0.022,
+        ),
+    ),
+    "pushed": GrooveTemplate(
+        name="pushed",
+        description="Driving feel: off-beats slightly early.",
+        timing_offsets=(
+            0.000, -0.012, 0.000, -0.016,
+            0.000, -0.012, 0.000, -0.016,
+            0.000, -0.012, 0.000, -0.016,
+            0.000, -0.012, 0.000, -0.016,
+        ),
+    ),
+    "shuffled": GrooveTemplate(
+        name="shuffled",
+        description="Strong shuffle: every second 16th note pushed late.",
+        timing_offsets=(
+            0.000, 0.000, 0.028, 0.000,
+            0.000, 0.000, 0.028, 0.000,
+            0.000, 0.000, 0.028, 0.000,
+            0.000, 0.000, 0.028, 0.000,
+        ),
+    ),
+}

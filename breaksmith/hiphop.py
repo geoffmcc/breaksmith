@@ -22,6 +22,7 @@ from .generator_shared import (
     _activity,
     _step_from_fraction,
     _humanized_velocity,
+    groove_timing_offset,
 )
 
 
@@ -186,6 +187,8 @@ def _add_hit(
     swing: float,
     snare_late_offset: float,
     rng: random.Random,
+    groove: str = "straight",
+    steps_per_bar: int = 16,
 ) -> None:
     velocity = _humanized_velocity(velocity, humanize, rng)
     timing_offset = swing if step % 2 == 1 else 0.0
@@ -193,6 +196,7 @@ def _add_hit(
         timing_offset += snare_late_offset
     if humanize:
         timing_offset += rng.uniform(-0.06, 0.06) * humanize
+    timing_offset += groove_timing_offset(groove, steps_per_bar, step)
     timing_offset = round(max(-0.45, min(0.49, timing_offset)), 6)
     for existing in hits[instrument]:
         if existing.bar == bar and existing.step == step:
@@ -237,6 +241,7 @@ def generate_hiphop_pattern(
     swing = min(0.5, controls.swing + preset.swing_amount)
     restraint = controls.source_restraint
     phrase_aware = controls.phrase_awareness
+    groove_name = controls.groove
 
     for bar in range(bars):
         section = bar_sections.get(bar)
@@ -267,12 +272,14 @@ def generate_hiphop_pattern(
                     *preset.velocities.snare,
                 ),
                 humanize, swing, preset.snare_late_offset, rng,
+                groove_name, steps,
             )
 
         _add_hit(
             hits, "kick", bar, 0,
             _velocity(_activity(analysis.low_activity, offset), *preset.velocities.kick),
             humanize, swing, 0.0, rng,
+            groove_name, steps,
         )
 
         kick_forbidden = {_step_from_fraction(steps, f) for f in (0.25, 0.75)}
@@ -300,6 +307,7 @@ def generate_hiphop_pattern(
                         hits, "kick", bar, step,
                         _velocity(max(0.0, score), *preset.velocities.kick),
                         humanize, swing, 0.0, rng,
+                        groove_name, steps,
                     )
                     selected += 1
 
@@ -317,6 +325,7 @@ def generate_hiphop_pattern(
                     hits, "closed_hat", bar, step,
                     _velocity(base, *preset.velocities.hat),
                     humanize, swing, 0.0, rng,
+                    groove_name, steps,
                 )
 
         for fraction in grammar.open_hat_fractions:
@@ -327,6 +336,7 @@ def generate_hiphop_pattern(
                     hits, "open_hat", bar, step,
                     _velocity(energy, *preset.velocities.open_hat),
                     humanize, swing, 0.0, rng,
+                    groove_name, steps,
                 )
 
         ghost_set = {_step_from_fraction(steps, f) for f in grammar.ghost_fractions}
@@ -339,6 +349,7 @@ def generate_hiphop_pattern(
                     hits, "snare", bar, gs,
                     _velocity(emptiness, *preset.velocities.ghost),
                     humanize, swing, preset.snare_late_offset, rng,
+                    groove_name, steps,
                 )
 
         percussion_steps = {steps // 2 - 2, steps // 2 + 2, steps - 3}
@@ -352,6 +363,7 @@ def generate_hiphop_pattern(
                         *preset.velocities.percussion,
                     ),
                     humanize, swing, 0.0, rng,
+                    groove_name, steps,
                 )
 
         is_phrase_end = (bar + 1) % grammar.fill_stride == 0 or bar == bars - 1
@@ -372,6 +384,7 @@ def generate_hiphop_pattern(
                         humanize, swing,
                         preset.snare_late_offset if inst == "snare" else 0.0,
                         rng,
+                        groove_name, steps,
                     )
 
     for instrument_hits in hits.values():

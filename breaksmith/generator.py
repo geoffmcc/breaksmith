@@ -15,6 +15,7 @@ from .generator_shared import (
     _step_from_fraction,
     _timing_offset,
     _humanized_velocity,
+    groove_timing_offset,
 )
 from .models import (
     GENRE_GRAMMARS,
@@ -187,9 +188,11 @@ def _add_hit(
     controls: GenerationControls,
     preset: StylePreset,
     rng: random.Random,
+    steps_per_bar: int = 16,
 ) -> None:
     velocity = _humanized_velocity(velocity, controls.humanize, rng)
     timing_offset = _timing_offset(step, controls, preset.swing_amount, rng)
+    timing_offset += groove_timing_offset(controls.groove, steps_per_bar, step)
     timing_offset = max(-0.49, min(0.49 - step % 1, timing_offset))
     for existing in hits[instrument]:
         if existing.bar == bar and existing.step == step:
@@ -280,6 +283,7 @@ def generate_pattern(
                 controls,
                 preset,
                 rng,
+                steps_per_bar=steps,
             )
 
         _add_hit(
@@ -291,6 +295,7 @@ def generate_pattern(
             controls,
             preset,
             rng,
+            steps_per_bar=steps,
         )
 
         forbidden = {
@@ -341,6 +346,7 @@ def generate_pattern(
                         controls,
                         preset,
                         rng,
+                        steps_per_bar=steps,
                     )
                     selected += 1
 
@@ -369,6 +375,7 @@ def generate_pattern(
                     controls,
                     preset,
                     rng,
+                    steps_per_bar=steps,
                 )
 
         for fraction in grammar.open_hat_fractions:
@@ -384,6 +391,7 @@ def generate_pattern(
                     controls,
                     preset,
                     rng,
+                    steps_per_bar=steps,
                 )
 
 
@@ -404,6 +412,7 @@ def generate_pattern(
                     controls,
                     preset,
                     rng,
+                    steps_per_bar=steps,
                 )
 
         percussion_steps = {steps // 2 - 2, steps // 2 + 1, steps - 3}
@@ -424,6 +433,7 @@ def generate_pattern(
                     controls,
                     preset,
                     rng,
+                    steps_per_bar=steps,
                 )
 
         is_phrase_end = (bar + 1) % grammar.fill_stride == 0 or bar == bars - 1
@@ -447,6 +457,7 @@ def generate_pattern(
                         controls,
                         preset,
                         rng,
+                        steps_per_bar=steps,
                     )
 
     for instrument_hits in hits.values():

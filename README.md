@@ -6,16 +6,18 @@ The current system is rule-based and audio-aware: it estimates tempo, builds a b
 
 ## Requirements
 
-- Python 3.11 or 3.12
+- Python 3.12 recommended; Python 3.11 is also supported
 - `uv`
 - FFmpeg available on `PATH` for formats such as MP3/M4A
 
 ## Install
 
 ```bash
-uv python install 3.11
-uv sync --python 3.11
+uv python install 3.12
+uv sync --python 3.12
 ```
+
+Breaksmith supports Python 3.11 and 3.12. New installs should use Python 3.12 unless you need 3.11 for compatibility with an existing environment.
 
 ## Commands
 

@@ -479,6 +479,7 @@ def test_midi_with_velocity_curve_from_cli(monkeypatch, tmp_path: Path) -> None:
         downbeat_start=None,
         preview=False,
         structure=None,
+        genre=None,
         midi_velocity_curve="exponential",
     )
     assert cli._run_generate(args) == 0
@@ -685,6 +686,7 @@ def test_generate_output_suggests_bars_for_extra_beat_source(
         downbeat_start=None,
         preview=False,
         structure=None,
+        genre=None,
         midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
@@ -713,6 +715,7 @@ def test_generate_output_reports_exact_requested_bars(monkeypatch, capsys, tmp_p
         downbeat_start=None,
         preview=False,
         structure=None,
+        genre=None,
         midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
@@ -820,6 +823,7 @@ def test_generate_with_preview_writes_wav(monkeypatch, tmp_path: Path) -> None:
         downbeat_start=None,
         preview=True,
         structure=None,
+        genre=None,
         midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
@@ -852,6 +856,7 @@ def test_generate_preview_matches_render_preview(monkeypatch, tmp_path: Path) ->
         downbeat_start=None,
         preview=True,
         structure=None,
+        genre=None,
         midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
@@ -925,6 +930,7 @@ def test_generate_with_structure_cli_flag(monkeypatch, capsys, tmp_path: Path) -
         downbeat_start=None,
         preview=False,
         structure="short",
+        genre=None,
         midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0
@@ -956,6 +962,7 @@ def test_generate_with_structure_overrides_bars(monkeypatch, capsys, tmp_path: P
         downbeat_start=None,
         preview=False,
         structure="minimal",
+        genre=None,
         midi_velocity_curve="linear",
     )
     assert cli._run_generate(args) == 0

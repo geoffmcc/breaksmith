@@ -11,11 +11,16 @@ from .exporters.midi import write_midi
 from .exporters.strudel import write_strudel
 from .generator import STYLE_CONFIG, GenerationControls, generate_pattern
 from .models import (
+    ALL_STYLES,
     ARRANGEMENT_PRESETS,
     AudioAnalysis,
+    GENRES,
+    HIPHOP_STYLES,
     Section,
     arrangement_bar_count,
     ensure_output_dir,
+    resolve_genre,
+    validate_style_genre,
 )
 from .synth import write_preview
 
@@ -151,8 +156,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument(
         "--style",
-        choices=[*STYLE_CONFIG, "all"],
+        choices=[*ALL_STYLES, "all"],
         default="all",
+    )
+    generate_parser.add_argument(
+        "--genre",
+        choices=[*GENRES],
+        help="Music genre (inferred from style if omitted)",
     )
     generate_parser.add_argument("--seed", type=int, default=42)
     generate_parser.add_argument("--bpm", type=_positive_bpm, help="Override tempo estimation")
@@ -265,16 +275,27 @@ def _run_generate(args: argparse.Namespace) -> int:
     else:
         effective_bars = args.bars or analysis.bar_count
 
+    genre = resolve_genre(style=args.style if args.style != "all" else "minimal", genre=args.genre)
+    if args.style != "all":
+        validate_style_genre(args.style, genre)
+
     controls = GenerationControls(
         density=args.density,
         swing=args.swing,
         humanize=args.humanize,
         variation=args.variation,
         bars=effective_bars,
+        genre=genre,
     )
     controls.validate()
     generation_bar_count = effective_bars
-    styles = list(STYLE_CONFIG) if args.style == "all" else [args.style]
+    if args.style == "all":
+        if genre == "hiphop":
+            styles = list(HIPHOP_STYLES)
+        else:
+            styles = list(STYLE_CONFIG)
+    else:
+        styles = [args.style]
     print(f"Source: {args.audio}")
     print(f"Detected BPM: {analysis.bpm:.2f}")
     print(f"Duration: {analysis.duration_seconds:.2f}s")

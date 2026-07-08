@@ -9,6 +9,36 @@ from typing import Any
 INSTRUMENTS = ("kick", "snare", "closed_hat", "open_hat", "percussion")
 DURATION_FITS = ("clean", "small_tail", "extra_beat", "partial_bar")
 
+GENRES = ("dnb", "hiphop")
+
+DNB_STYLES = ("minimal", "rolling", "aggressive", "liquid", "jungle", "halfstep", "techstep")
+HIPHOP_STYLES = ("boom_bap", "lo_fi", "dusty", "soulful", "laid_back", "east_coast", "sparse")
+
+STYLE_GENRE_MAP: dict[str, str] = {
+    style: "dnb" for style in DNB_STYLES
+} | {style: "hiphop" for style in HIPHOP_STYLES}
+
+ALL_STYLES = DNB_STYLES + HIPHOP_STYLES
+
+
+def resolve_genre(style: str, genre: str | None = None) -> str:
+    if genre is not None:
+        if genre not in GENRES:
+            raise ValueError(f"Unknown genre: {genre}")
+        return genre
+    if style not in STYLE_GENRE_MAP:
+        raise ValueError(f"Unknown style: {style}")
+    return STYLE_GENRE_MAP[style]
+
+
+def validate_style_genre(style: str, genre: str) -> None:
+    if style not in STYLE_GENRE_MAP:
+        raise ValueError(f"Unknown style: {style}")
+    if STYLE_GENRE_MAP[style] != genre:
+        raise ValueError(
+            f"style '{style}' is not available for genre '{genre}'"
+        )
+
 
 @dataclass(slots=True)
 class AudioAnalysis:

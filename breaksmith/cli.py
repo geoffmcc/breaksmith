@@ -86,6 +86,14 @@ def _format_grid_fit(analysis: AudioAnalysis) -> str:
 
 
 def _print_loop_diagnostics(analysis: AudioAnalysis) -> None:
+    if analysis.raw_detected_bpm:
+        candidates = ", ".join(f"{value:.2f}" for value in analysis.candidate_bpm_values)
+        print(f"Raw detected BPM: {analysis.raw_detected_bpm:.2f}")
+        print(f"Candidate BPMs: {candidates}")
+        print(
+            f"Selected BPM: {analysis.bpm:.2f} "
+            f"(score={analysis.tempo_selection_score:.2f}; {analysis.tempo_selection_reason})"
+        )
     print(f"Grid fit: {_format_grid_fit(analysis)}")
     print(
         "Timing confidence: "

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +12,27 @@ from .models import METER_44, AudioAnalysis, Meter
 
 
 DurationFit = Literal["clean", "small_tail", "extra_beat", "partial_bar"]
+
+
+@dataclass(frozen=True, slots=True)
+class TempoGridSelection:
+    bpm: float
+    grid_start_seconds: float
+    grid_start_source: str
+    score: float
+    bar_fit_score: float
+    onset_spacing_score: float
+    beat_confidence: float
+    expected_beat_count: int
+    loop_fit: dict[str, float | int | str | list[str]]
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class TempoGridDiagnostics:
+    raw_detected_bpm: float
+    candidate_bpm_values: list[float]
+    selection: TempoGridSelection
 
 
 def _plural(value: float, singular: str, plural: str | None = None) -> str:
@@ -218,6 +240,199 @@ def _coerce_tempo(value: object) -> float:
     return float(array[0]) if array.size else 0.0
 
 
+def _unique_sorted(values: list[float]) -> list[float]:
+    unique: list[float] = []
+    for value in sorted(values):
+        if value > 0 and all(not math.isclose(value, existing, rel_tol=0.001) for existing in unique):
+            unique.append(value)
+    return unique
+
+
+def _tempo_candidates(raw_bpm: float, bpm_override: float | None) -> list[float]:
+    if bpm_override is not None:
+        return [float(bpm_override)]
+    if not math.isfinite(raw_bpm) or raw_bpm <= 0:
+        return [172.0]
+
+    candidates = [raw_bpm]
+    for octave in range(-4, 5):
+        candidates.append(raw_bpm * (2**octave))
+
+    # Keep octave relatives that are musically useful while avoiding extreme grids.
+    plausible = [value for value in candidates if 45.0 <= value <= 240.0]
+    return _unique_sorted(plausible or candidates)
+
+
+def _plausible_bpm_score(bpm: float) -> float:
+    if 80.0 <= bpm <= 180.0:
+        return 1.0
+    if 60.0 <= bpm <= 220.0:
+        return 0.75
+    if 45.0 <= bpm <= 240.0:
+        return 0.45
+    return 0.0
+
+
+def _bar_fit_score(loop_fit: dict[str, float | int | str | list[str]]) -> float:
+    fit = loop_fit["duration_fit"]
+    if fit == "clean":
+        return 1.0
+    if fit == "small_tail":
+        return 0.85
+    if fit == "extra_beat":
+        return 0.45
+
+    bar_duration = float(loop_fit["bar_duration_seconds"])
+    remainder = float(loop_fit["duration_remainder_seconds"])
+    if bar_duration <= 0:
+        return 0.0
+    nearest_boundary = min(remainder, max(0.0, bar_duration - remainder))
+    return max(0.0, 1.0 - nearest_boundary / (bar_duration * 0.5))
+
+
+def _onset_spacing_score(beat_times: np.ndarray, bpm: float, meter: Meter) -> float:
+    if beat_times.size < 2 or bpm <= 0:
+        return 0.5
+    intervals = np.diff(beat_times)
+    intervals = intervals[intervals > 0.02]
+    if intervals.size == 0:
+        return 0.5
+
+    median_interval = float(np.median(intervals))
+    beat_duration = meter.beat_duration(bpm)
+    multipliers = (
+        (1.0, 1.0),
+        (2.0, 0.9),
+        (float(meter.primary_beats_per_bar), 0.95),
+        (float(meter.primary_beats_per_bar * 2), 0.65),
+    )
+    best = 0.0
+    for multiplier, weight in multipliers:
+        expected = beat_duration * multiplier
+        if expected <= 0:
+            continue
+        relative_error = abs(median_interval - expected) / expected
+        best = max(best, weight * max(0.0, 1.0 - relative_error))
+    return min(1.0, best)
+
+
+def _grid_alignment_score(beat_times: np.ndarray, bpm: float, grid_start: float, meter: Meter) -> float:
+    if beat_times.size == 0 or bpm <= 0:
+        return 0.75 if math.isclose(grid_start, 0.0, abs_tol=0.001) else 0.5
+    beat_duration = meter.beat_duration(bpm)
+    if beat_duration <= 0:
+        return 0.0
+    usable = beat_times[beat_times >= grid_start - beat_duration * 0.25]
+    if usable.size == 0:
+        return 0.5
+    offsets = np.mod(usable - grid_start, beat_duration)
+    distances = np.minimum(offsets, beat_duration - offsets) / beat_duration
+    return max(0.0, 1.0 - float(np.mean(np.clip(distances, 0.0, 0.5))) * 2.0)
+
+
+def _grid_start_candidates(
+    *,
+    beat_times: np.ndarray,
+    duration: float,
+    grid_start_override: float | None,
+    downbeat_override: float | None,
+) -> list[tuple[float, str]]:
+    if downbeat_override is not None:
+        return [(float(downbeat_override), "manual_downbeat")]
+    if grid_start_override is not None:
+        return [(float(grid_start_override), "manual_grid_start")]
+    candidates: list[tuple[float, str]] = [(0.0, "audio_start")]
+    if beat_times.size >= 2:
+        first = float(beat_times[0])
+        if 0.0 <= first < duration:
+            candidates.append((first, "detected"))
+    return candidates
+
+
+def select_tempo_grid(
+    *,
+    raw_detected_bpm: float,
+    beat_times_detected: np.ndarray,
+    duration: float,
+    steps_per_bar: int,
+    meter: Meter,
+    bpm_override: float | None = None,
+    grid_start_override: float | None = None,
+    downbeat_override: float | None = None,
+) -> TempoGridDiagnostics:
+    """Score tempo-octave and grid-start pairs as one decision.
+
+    Librosa often reports a metrical octave rather than the intended beat unit. The
+    selected pair balances whole-bar duration fit, detected onset spacing, plausible
+    BPM range, beat-count support, and grid alignment so a tiny detected offset does
+    not beat an exact zero-start loop unless the pickup evidence is stronger.
+    """
+    bpm_values = _tempo_candidates(raw_detected_bpm, bpm_override)
+    grid_values = _grid_start_candidates(
+        beat_times=beat_times_detected,
+        duration=duration,
+        grid_start_override=grid_start_override,
+        downbeat_override=downbeat_override,
+    )
+    selections: list[TempoGridSelection] = []
+
+    for bpm in bpm_values:
+        beat_duration = meter.beat_duration(bpm)
+        spacing_score = _onset_spacing_score(beat_times_detected, bpm, meter)
+        plausible_score = _plausible_bpm_score(bpm)
+        for grid_start, source in grid_values:
+            if grid_start >= duration:
+                continue
+            loop_fit = calculate_loop_fit(
+                duration_seconds=duration,
+                bpm=bpm,
+                steps_per_bar=steps_per_bar,
+                grid_start_seconds=grid_start,
+                meter=meter,
+            )
+            effective_duration = max(0.0, duration - grid_start)
+            expected_beats = max(1, round(effective_duration / beat_duration))
+            beat_confidence = min(1.0, int(beat_times_detected.size) / expected_beats)
+            bar_score = _bar_fit_score(loop_fit)
+            grid_score = _grid_alignment_score(beat_times_detected, bpm, grid_start, meter)
+            zero_start_bonus = 0.04 if math.isclose(grid_start, 0.0, abs_tol=0.001) else 0.0
+            score = (
+                bar_score * 0.4
+                + spacing_score * 0.25
+                + beat_confidence * 0.15
+                + grid_score * 0.1
+                + plausible_score * 0.1
+                + zero_start_bonus
+            )
+            selections.append(
+                TempoGridSelection(
+                    bpm=bpm,
+                    grid_start_seconds=grid_start,
+                    grid_start_source=source,
+                    score=score,
+                    bar_fit_score=bar_score,
+                    onset_spacing_score=spacing_score,
+                    beat_confidence=beat_confidence,
+                    expected_beat_count=expected_beats,
+                    loop_fit=loop_fit,
+                    reason=(
+                        f"bar_fit={bar_score:.2f}, onset_spacing={spacing_score:.2f}, "
+                        f"beat_confidence={beat_confidence:.2f}, grid_fit={grid_score:.2f}"
+                    ),
+                )
+            )
+
+    if not selections:
+        raise ValueError("No valid tempo/grid candidates were available")
+
+    selection = max(selections, key=lambda candidate: candidate.score)
+    return TempoGridDiagnostics(
+        raw_detected_bpm=raw_detected_bpm,
+        candidate_bpm_values=[round(value, 4) for value in bpm_values],
+        selection=selection,
+    )
+
+
 def analyze_audio(
     audio_path: Path,
     *,
@@ -274,19 +489,12 @@ def analyze_audio(
         units="frames",
         trim=False,
     )
-    bpm = float(bpm_override) if bpm_override is not None else _coerce_tempo(estimated_tempo)
+    raw_detected_bpm = _coerce_tempo(estimated_tempo)
     warnings: list[str] = []
 
-    if not math.isfinite(bpm) or bpm <= 0:
-        bpm = 172.0
+    if bpm_override is None and (not math.isfinite(raw_detected_bpm) or raw_detected_bpm <= 0):
+        raw_detected_bpm = 172.0
         warnings.append("Tempo could not be estimated; defaulted to 172 BPM.")
-
-    # Keep likely half/double-time estimates in a useful DnB range.
-    if bpm_override is None:
-        while bpm < 120:
-            bpm *= 2
-        while bpm > 220:
-            bpm /= 2
 
     beat_times_detected = librosa.frames_to_time(
         beat_frames,
@@ -294,46 +502,40 @@ def analyze_audio(
         hop_length=hop_length,
     ).astype(float)
 
+    tempo_grid = select_tempo_grid(
+        raw_detected_bpm=raw_detected_bpm,
+        beat_times_detected=beat_times_detected,
+        duration=duration,
+        steps_per_bar=steps_per_bar,
+        meter=m,
+        bpm_override=bpm_override,
+        grid_start_override=grid_start_override,
+        downbeat_override=downbeat_override,
+    )
+    selection = tempo_grid.selection
+    bpm = selection.bpm
+    first_beat = selection.grid_start_seconds
+    grid_start_source = selection.grid_start_source
+    loop_fit = selection.loop_fit
+
     beat_duration = m.beat_duration(bpm)
     step_duration = m.step_duration(bpm)
-    grid_start_source = "detected"
     if downbeat_override is not None:
-        first_beat = float(downbeat_override)
-        grid_start_source = "manual_downbeat"
-        warnings.append(f"Manual downbeat start override applied at {first_beat:.3f}s.")
+        warnings.append(f"Manual downbeat start override applied at {selection.grid_start_seconds:.3f}s.")
     elif grid_start_override is not None:
-        first_beat = float(grid_start_override)
-        grid_start_source = "manual_grid_start"
-        warnings.append(f"Manual grid start override applied at {first_beat:.3f}s.")
-    elif beat_times_detected.size >= 2:
-        first_beat = float(beat_times_detected[0])
-    else:
-        first_beat = 0.0
-        grid_start_source = "audio_start"
+        warnings.append(f"Manual grid start override applied at {selection.grid_start_seconds:.3f}s.")
+    elif beat_times_detected.size < 2:
         warnings.append("Few reliable beats were found; the grid begins at the audio start.")
-
-    # Include the beginning when the first tracked beat is implausibly late.
-    if grid_start_source == "detected" and first_beat > beat_duration * 1.5:
-        first_beat = 0.0
-        grid_start_source = "audio_start"
-        warnings.append("Tracked downbeat was late; the grid was anchored to 0 seconds.")
 
     usable_duration = max(0.0, duration - first_beat)
     detected_beat_count = int(beat_times_detected.size)
-    expected_beat_count = max(1, round(usable_duration / beat_duration))
-    beat_confidence = min(1.0, detected_beat_count / expected_beat_count)
-    tempo_confidence = 1.0 if bpm_override is not None else beat_confidence
+    expected_beat_count = selection.expected_beat_count
+    beat_confidence = selection.beat_confidence
+    tempo_confidence = 1.0 if bpm_override is not None else min(1.0, selection.score)
     if beat_confidence < 0.35:
         warnings.append(
             f"Beat confidence is low ({beat_confidence:.2f}); verify the grid with a click render."
         )
-    loop_fit = calculate_loop_fit(
-        duration_seconds=duration,
-        bpm=bpm,
-        steps_per_bar=steps_per_bar,
-        grid_start_seconds=first_beat,
-        meter=m,
-    )
     if loop_fit["duration_fit"] == "clean":
         bar_count = max(1, int(loop_fit["complete_bar_count"]))
         total_steps = bar_count * steps_per_bar
@@ -402,4 +604,9 @@ def analyze_audio(
         duration_fit=str(loop_fit["duration_fit"]),
         loop_warnings=list(loop_fit["loop_warnings"]),
         warnings=warnings,
+        raw_detected_bpm=round(float(tempo_grid.raw_detected_bpm), 4),
+        candidate_bpm_values=tempo_grid.candidate_bpm_values,
+        tempo_selection_score=round(float(selection.score), 6),
+        tempo_selection_reason=selection.reason,
+        bar_fit_score=round(float(selection.bar_fit_score), 6),
     )

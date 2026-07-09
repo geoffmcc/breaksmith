@@ -138,6 +138,8 @@ uv run breaksmith analyze input.wav --bpm 172 --features-csv features.csv
 
 The output includes:
 
+- **Raw detected BPM** and **Candidate BPMs**: the tracker's raw estimate plus octave-related tempo candidates considered together with grid start.
+- **Selected BPM**: the candidate chosen by whole-bar fit, onset spacing, plausible tempo range, beat confidence, and grid alignment.
 - **Tempo confidence**: how reliable the BPM estimate is. Low with sustained material.
 - **Beat confidence**: how many beat positions were detected vs expected. Low means verify by ear.
 - **Detected beat count**: number of beat positions found.
@@ -470,8 +472,8 @@ If the rendered preview sounds good, use it as a reference. If the groove needs 
 |---|---|---|
 | `uv: command not found` | uv not installed | Install uv (see Installation section) |
 | Hardlink warning on `uv sync` | Cross-filesystem sync on WSL | `export UV_LINK_MODE=copy` |
-| Wrong BPM | Source has weak transients or variable tempo | Provide `--bpm` |
-| Half-time or double-time detection | Beat tracker chose wrong subdivision | Provide `--bpm` to anchor |
+| Wrong BPM | Source has weak transients or variable tempo | Check candidate BPM diagnostics, then provide `--bpm` if needed |
+| Half-time or double-time detection | Beat tracker chose wrong subdivision | Automatic analysis scores octave candidates; provide `--bpm` only if the selected candidate is still wrong |
 | Click track is off by 1/4 or 1/8 note | Grid start or downbeat is wrong | Use `--grid-start` or `--downbeat-start` |
 | Low beat confidence | Sustained material (pads, strings) without clear transients | Verify timing with `--render-click` |
 | Source is almost but not exactly N bars | Export artifact or loop trimming | Use `--bars` to set exact count |

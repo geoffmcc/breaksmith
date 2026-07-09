@@ -343,6 +343,11 @@ class AudioAnalysis:
     duration_fit: str = "clean"
     loop_warnings: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    raw_detected_bpm: float = 0.0
+    candidate_bpm_values: list[float] = field(default_factory=list)
+    tempo_selection_score: float = 0.0
+    tempo_selection_reason: str = ""
+    bar_fit_score: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

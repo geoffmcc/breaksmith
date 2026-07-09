@@ -1,6 +1,6 @@
 # Breaksmith
 
-Breaksmith is an audio-aware drum and groove generator. It analyzes loops or tracks and produces editable MIDI, Strudel, JSON, and rendered audio previews.
+Breaksmith is an audio-aware drum and groove generator with two first-class interfaces: a scriptable CLI and a PySide6 desktop GUI. It analyzes loops or tracks and produces editable MIDI, Strudel, JSON, and rendered audio previews.
 
 The generator is rule-based: it reads source activity (onsets, low-end, high-end, energy, silence) and uses style-specific rules to place drum hits. Every output is deterministic for the same source, seed, style, and controls.
 
@@ -37,6 +37,7 @@ The generator is rule-based: it reads source activity (onsets, low-end, high-end
 - Reproducibility metadata (source SHA256, pattern SHA256, full input manifest)
 - MIDI, JSON, Strudel, and WAV preview export
 - Comparison preview across all styles (`--preview-comparison`)
+- Desktop workflow with real waveform display, playback, analysis diagnostics, generation controls, presets, artifacts, and run history (`breaksmith-gui`)
 
 ## Quick Start
 
@@ -90,6 +91,31 @@ export UV_LINK_MODE=copy
 uv run breaksmith --help
 uv run breaksmith analyze --help
 uv run breaksmith generate --help
+uv run breaksmith-gui --help
+```
+
+## Interfaces
+
+Breaksmith is intentionally split into shared core services plus two supported adapters:
+
+```text
+Breaksmith Core
+├── Breaksmith CLI
+└── Breaksmith Desktop GUI
+```
+
+The GUI does not replace the CLI. The CLI remains suitable for automation, batch work, remote/headless environments, reproducible workflows, and tests. The GUI calls the same analysis, generation, export, preset, and run-directory services used by the CLI.
+
+Launch the GUI:
+
+```bash
+uv run breaksmith-gui
+```
+
+Launch with an initial source file:
+
+```bash
+uv run breaksmith-gui path/to/loop.wav
 ```
 
 ## Normal Workflow
@@ -101,6 +127,19 @@ uv run breaksmith generate --help
 5. **Audition** the rendered preview or import the MIDI into your DAW.
 6. **Refine** by adjusting density, per-layer controls, groove, or trying other styles.
 7. **Replace** the generated sounds with your own drum kit in the DAW.
+
+## Desktop Workflow
+
+1. Open or drag in an audio file.
+2. Review decoded metadata and the real waveform.
+3. Analyze the source and inspect BPM, tempo candidates, confidence, bar fit, and warnings.
+4. Use BPM and grid-start overrides when the detector is ambiguous.
+5. Configure generation controls and variation count.
+6. Generate patterns and optional previews.
+7. Double-click a result to audition its rendered preview.
+8. Open the run directory to locate MIDI, Strudel, JSON, WAV, analysis, and manifest files.
+9. Save reusable generation settings as presets.
+10. Reopen prior work from the Run History tab.
 
 ## Commands
 
@@ -173,6 +212,7 @@ Options are grouped below. See [`docs/CLI.md`](docs/CLI.md) for the full referen
 | `--genre` | `dnb`, `hiphop` | inferred from style |
 | `--style` | 14 style names + `all` | `all` (all styles for genre) |
 | `--structure` | `short`, `build-drop`, `minimal` | none (flat bars) |
+| `--preset` | preset JSON path | none |
 
 **Core controls**:
 
@@ -454,6 +494,21 @@ output/
 
 When `--style all` is used, all styles for the genre are generated inside the same run directory. `manifest.json` records the command, source, selected tempo, options, and relative artifact paths.
 
+Inspect prior runs from the CLI:
+
+```bash
+uv run breaksmith runs --output output
+uv run breaksmith runs --output output --json
+```
+
+## Presets
+
+The GUI can save and load generation presets as human-readable JSON. Presets use a versioned schema and can be used from the CLI:
+
+```bash
+uv run breaksmith generate input.wav --preset presets/liquid.json --output output
+```
+
 See [`docs/OUTPUT_FORMATS.md`](docs/OUTPUT_FORMATS.md) for detailed format descriptions.
 
 ## Ableton Workflow
@@ -512,6 +567,8 @@ See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for deeper diagnostics.
 ## Documentation Index
 
 - [Full CLI Reference](docs/CLI.md) — every option with examples
+- [GUI Guide](docs/GUI.md) — desktop workflow, presets, run history, and logs
+- [Architecture](docs/ARCHITECTURE.md) — shared core, CLI adapter, GUI adapter, jobs, presets, and artifacts
 - [Musical Model](docs/MUSICAL_MODEL.md) — how generation works under the hood
 - [Output Formats](docs/OUTPUT_FORMATS.md) — JSON, MIDI, Strudel, preview details
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — symptom/cause/fix reference
@@ -525,7 +582,7 @@ See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) for deeper diagnostics.
 
 ```bash
 uv sync
-uv run pytest         # 108 tests
+uv run pytest         # 130 tests
 uv run ruff check .   # lint
 ```
 
@@ -534,14 +591,18 @@ uv run ruff check .   # lint
 ```
 breaksmith/
 ├── __init__.py
+├── app.py                   # Shared typed application services
 ├── analysis.py              # Audio analysis (librosa)
-├── cli.py                   # CLI argument parsing and dispatch
+├── cli.py                   # CLI adapter over shared services
 ├── click.py                 # Click track rendering
 ├── generator.py             # DnB pattern generation
 ├── generator_shared.py      # Shared controls and utilities
 ├── hiphop.py                # Hip-hop pattern generation
 ├── models.py                # Data models (Meter, GenreGrammar, StylePreset, etc.)
+├── presets.py               # Versioned generation presets
+├── run.py                   # Run directory, manifest, artifact services
 ├── synth.py                 # Audio preview synthesis
+├── gui/                     # PySide6 desktop adapter
 └── exporters/
     ├── __init__.py
     ├── json_export.py       # JSON and CSV export

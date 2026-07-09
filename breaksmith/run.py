@@ -60,7 +60,9 @@ class RunContext:
             "options": options,
             "artifacts": [asdict(artifact) for artifact in self.artifacts],
         }
-        manifest_path.write_text(json.dumps(data, indent=2, default=str) + "\n", encoding="utf-8")
+        temp_path = manifest_path.with_suffix(".tmp")
+        temp_path.write_text(json.dumps(data, indent=2, default=str) + "\n", encoding="utf-8")
+        temp_path.replace(manifest_path)
         self.register("manifest", manifest_path, format="json")
         return manifest_path
 
@@ -126,3 +128,30 @@ def allocate_run_context(
             created_at=created_at,
         )
     raise RuntimeError(f"Could not allocate a unique run directory under {parent_dir}")
+
+
+def load_run_manifest(run_dir: Path) -> dict[str, Any]:
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Run manifest does not exist: {manifest_path}")
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Run manifest is not valid JSON: {manifest_path}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Run manifest must be a JSON object: {manifest_path}")
+    artifacts = data.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        raise ValueError(f"Run manifest artifacts must be a list: {manifest_path}")
+    safe_artifacts: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        rel = str(artifact.get("path", ""))
+        path = Path(rel)
+        if path.is_absolute() or ".." in path.parts:
+            continue
+        safe_artifacts.append(artifact)
+    data["artifacts"] = safe_artifacts
+    data.setdefault("run_directory", str(run_dir))
+    return data

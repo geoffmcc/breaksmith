@@ -1,41 +1,29 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from dataclasses import asdict
 from pathlib import Path
 
-import numpy as np
-import soundfile as sf
-
+from .app import AnalysisRequest, GenerationRequest, analyze_source, generate_patterns, list_run_manifests
 from .analysis import analyze_audio
-from .click import render_click_tracks
-from .exporters.json_export import write_analysis, write_feature_csv, write_pattern
-from .exporters.midi import write_midi
-from .exporters.strudel import write_strudel
-from .generator import STYLE_CONFIG, GenerationControls, generate_pattern
 from .models import (
     ALL_STYLES,
     ARRANGEMENT_PRESETS,
     AudioAnalysis,
     DEFAULT_STYLE_PER_GENRE,
-    GENRE_CONTROL_DEFAULTS,
     GENRES,
     GROOVE_PRESETS,
-    HIPHOP_STYLES,
     METER_PRESETS,
     Section,
     arrangement_bar_count,
-    ensure_output_dir,
     parse_time_signature,
     resolve_genre,
     validate_beat_grouping,
     validate_style_genre,
 )
-from .run import allocate_run_context
-from .synth import write_preview
+from .presets import load_preset
 
 
 def _positive_bpm(value: str) -> float:
@@ -205,6 +193,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     generate_parser.add_argument("--seed", type=int, default=42)
     generate_parser.add_argument(
+        "--preset",
+        type=Path,
+        help="Load generation settings from a Breaksmith preset JSON file; explicit audio/output still apply",
+    )
+    generate_parser.add_argument(
         "--variants",
         type=_positive_int("variants"),
         default=1,
@@ -336,27 +329,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Beat grouping override (e.g. '3+3' for 6/8, '2+2+3' for 7/8). Default follows meter.",
     )
 
+    runs_parser = subparsers.add_parser("runs", help="List previous Breaksmith runs")
+    runs_parser.add_argument("--output", type=Path, default=Path("output"))
+    runs_parser.add_argument("--limit", type=_positive_int("limit"), default=20)
+    runs_parser.add_argument("--json", action="store_true", help="Write run history as JSON")
+
     return parser
 
 
 def _run_analyze(args: argparse.Namespace) -> int:
-    meter = parse_time_signature(args.time_signature)
-    if args.beat_grouping is not None:
-        meter = validate_beat_grouping(meter, args.beat_grouping)
-    analysis = analyze_audio(
-        args.audio,
-        steps_per_bar=args.steps_per_bar,
-        bpm_override=args.bpm,
-        grid_start_override=args.grid_start,
-        downbeat_override=args.downbeat_start,
-        meter=meter,
+    result = analyze_source(
+        AnalysisRequest(
+            audio=args.audio,
+            output=args.output,
+            bpm=args.bpm,
+            steps_per_bar=args.steps_per_bar,
+            grid_start=args.grid_start,
+            downbeat_start=args.downbeat_start,
+            time_signature=args.time_signature,
+            beat_grouping=args.beat_grouping,
+            render_click=args.render_click,
+            features_csv=args.features_csv,
+        ),
+        analyzer=analyze_audio,
     )
-    output_parent = args.output.parent if args.output.suffix else args.output
-    analysis_filename = args.output.name if args.output.suffix else "analysis.json"
-    run = allocate_run_context(command="analyze", source=args.audio, parent_dir=output_parent)
-    analysis_path = run.path(analysis_filename)
-    write_analysis(analysis, analysis_path)
-    run.register("analysis", analysis_path, format="json")
+    analysis = result.analysis
+    analysis_artifact = next(
+        (artifact for artifact in result.artifacts if artifact["artifact_type"] == "analysis"),
+        None,
+    )
+    analysis_path = result.run_dir / (analysis_artifact["path"] if analysis_artifact else "analysis.json")
     print(f"Source: {args.audio}")
     print(f"BPM: {analysis.bpm:.2f}")
     print(f"Duration: {analysis.duration_seconds:.2f}s")
@@ -364,62 +366,68 @@ def _run_analyze(args: argparse.Namespace) -> int:
     _print_feature_summary(analysis)
     print(f"Detected output grid: {analysis.bar_count} bars")
     print(f"Wrote: {analysis_path}")
-    if args.features_csv:
-        features_path = run.path(args.features_csv.name)
-        write_feature_csv(analysis, features_path)
-        run.register("features_csv", features_path, format="csv")
-        print(f"Wrote feature CSV: {features_path}")
-    if args.render_click:
-        click_path, mixed_path = render_click_tracks(args.audio, analysis, run.run_dir)
-        run.register("click", click_path, format="wav")
-        run.register("source_with_click", mixed_path, format="wav")
-        print(f"Wrote click: {click_path}")
-        print(f"Wrote source with click: {mixed_path}")
-    manifest_path = run.write_manifest(
-        {
-            "bpm": args.bpm,
-            "steps_per_bar": args.steps_per_bar,
-            "grid_start": args.grid_start,
-            "downbeat_start": args.downbeat_start,
-            "time_signature": args.time_signature,
-            "beat_grouping": args.beat_grouping,
-            "render_click": args.render_click,
-            "features_csv": args.features_csv.name if args.features_csv else None,
-            "raw_detected_bpm": analysis.raw_detected_bpm,
-            "selected_bpm": analysis.bpm,
-            "tempo_source": analysis.tempo_source,
-        }
-    )
-    print(f"Wrote manifest: {manifest_path}")
-    print(f"Output written to: {run.run_dir}")
+    for artifact in result.artifacts:
+        artifact_path = result.run_dir / artifact["path"]
+        if artifact["artifact_type"] == "features_csv":
+            print(f"Wrote feature CSV: {artifact_path}")
+        elif artifact["artifact_type"] == "click":
+            print(f"Wrote click: {artifact_path}")
+        elif artifact["artifact_type"] == "source_with_click":
+            print(f"Wrote source with click: {artifact_path}")
+    print(f"Wrote manifest: {result.manifest_path}")
+    print(f"Output written to: {result.run_dir}")
     for warning in analysis.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
     return 0
 
 
 def _run_generate(args: argparse.Namespace) -> int:
+    if getattr(args, "preset", None):
+        preset = load_preset(args.preset)
+        request = preset.request
+        request = GenerationRequest(**{**asdict(request), "audio": args.audio, "output": args.output})
+    else:
+        request = GenerationRequest(
+            audio=args.audio,
+            output=args.output,
+            style=args.style,
+            genre=args.genre,
+            seed=args.seed,
+            variants=args.variants,
+            bpm=args.bpm,
+            steps_per_bar=args.steps_per_bar,
+            grid_start=args.grid_start,
+            downbeat_start=args.downbeat_start,
+            bars=args.bars,
+            structure=args.structure,
+            density=args.density,
+            swing=args.swing,
+            humanize=args.humanize,
+            variation=args.variation,
+            phrase_awareness=args.phrase_awareness,
+            groove=args.groove,
+            preview=args.preview,
+            preview_bars=args.preview_bars,
+            preview_comparison=args.preview_comparison,
+            source_restraint=args.source_restraint,
+            kick_density=args.kick_density,
+            snare_density=args.snare_density,
+            hat_density=args.hat_density,
+            open_hat_density=args.open_hat_density,
+            percussion_density=args.percussion_density,
+            midi_velocity_curve=args.midi_velocity_curve,
+            time_signature=args.time_signature,
+            beat_grouping=args.beat_grouping,
+        )
+    args = argparse.Namespace(**{**vars(args), **asdict(request)})
     meter = parse_time_signature(args.time_signature)
     if args.beat_grouping is not None:
         meter = validate_beat_grouping(meter, args.beat_grouping)
-    run_style = args.style if args.style != "all" else args.genre or "all"
-    run = allocate_run_context(
-        command="generate",
-        source=args.audio,
-        parent_dir=args.output,
-        style=run_style,
+    result = generate_patterns(
+        request,
+        analyzer=analyze_audio,
     )
-    output_dir = run.run_dir
-    analysis = analyze_audio(
-        args.audio,
-        steps_per_bar=args.steps_per_bar or meter.steps_per_bar,
-        bpm_override=args.bpm,
-        grid_start_override=args.grid_start,
-        downbeat_override=args.downbeat_start,
-        meter=meter,
-    )
-    analysis_path = output_dir / "analysis.json"
-    write_analysis(analysis, analysis_path)
-    run.register("analysis", analysis_path, format="json")
+    analysis = result.analysis
 
     arrangement: tuple[Section, ...] | None = None
     bars_explicit = args.bars is not None
@@ -437,33 +445,7 @@ def _run_generate(args: argparse.Namespace) -> int:
     if args.style != "all":
         validate_style_genre(args.style, genre)
 
-    genre_defaults = GENRE_CONTROL_DEFAULTS.get(genre, {})
-    controls = GenerationControls(
-        density=args.density if args.density is not None else genre_defaults.get("density", 0.5),
-        swing=args.swing if args.swing is not None else genre_defaults.get("swing", 0.0),
-        humanize=args.humanize if args.humanize is not None else genre_defaults.get("humanize", 0.0),
-        variation=args.variation if args.variation is not None else genre_defaults.get("variation", 0.25),
-        source_restraint=args.source_restraint if args.source_restraint is not None else genre_defaults.get("source_restraint", 0.0),
-        phrase_awareness=args.phrase_awareness,
-        groove=args.groove,
-        bars=effective_bars,
-        genre=genre,
-        kick_density=args.kick_density,
-        snare_density=args.snare_density,
-        hat_density=args.hat_density,
-        open_hat_density=args.open_hat_density,
-        percussion_density=args.percussion_density,
-        meter=meter,
-    )
-    controls.validate()
     generation_bar_count = effective_bars
-    if args.style == "all":
-        if genre == "hiphop":
-            styles = list(HIPHOP_STYLES)
-        else:
-            styles = list(STYLE_CONFIG)
-    else:
-        styles = [args.style]
     print(f"Source: {args.audio}")
     print(f"Detected BPM: {analysis.bpm:.2f}")
     print(f"Duration: {analysis.duration_seconds:.2f}s")
@@ -491,9 +473,9 @@ def _run_generate(args: argparse.Namespace) -> int:
         elif analysis.duration_fit == "partial_bar":
             print("Suggestion: pass --bars explicitly if the source has a known intended length.")
     else:
-        requested_duration = controls.bars * analysis.bar_duration_seconds
+        requested_duration = result.controls.bars * analysis.bar_duration_seconds
         remainder = analysis.effective_duration_seconds - requested_duration
-        print(f"Requested grid: {controls.bars} bars")
+        print(f"Requested grid: {result.controls.bars} bars")
         if remainder > analysis.step_duration_seconds * 0.25:
             print(f"Ignoring {remainder:.2f}s of source audio beyond the requested grid boundary.")
         elif remainder < -analysis.step_duration_seconds * 0.25:
@@ -505,120 +487,46 @@ def _run_generate(args: argparse.Namespace) -> int:
             print("Requested grid aligns with the analyzed source duration.")
     print(
         "Controls: "
-        f"bars={generation_bar_count}, density={controls.density}, "
-        f"swing={controls.swing}, humanize={controls.humanize}, variation={controls.variation}"
+        f"bars={generation_bar_count}, density={result.controls.density}, "
+        f"swing={result.controls.swing}, humanize={result.controls.humanize}, variation={result.controls.variation}"
     )
-
-    try:
-        source_bytes = Path(args.audio).read_bytes()
-        source_sha256 = hashlib.sha256(source_bytes).hexdigest()
-    except Exception:
-        source_sha256 = None
-
-    preview_arrays: list[tuple[str, np.ndarray]] = []
-
-    for style in styles:
-        for variant in range(args.variants):
-            variant_seed = args.seed + variant
-            pattern = generate_pattern(
-                analysis, style, seed=variant_seed, controls=controls, arrangement=arrangement
-            )
-            pattern.metadata["source_sha256"] = source_sha256
-            pattern.metadata["input_manifest"] = {
-                "seed": variant_seed,
-                "style": style,
-                "genre": genre,
-                "controls": asdict(controls),
-                "generator_version": pattern.metadata.get("generator_version", "0.1.0"),
-            }
-            pattern_dict = pattern.to_dict()
-            pattern_json = json.dumps(pattern_dict, default=str, indent=2)
-            pattern_sha256 = hashlib.sha256(pattern_json.encode()).hexdigest()
-            pattern.metadata["pattern_sha256"] = pattern_sha256
-            if args.variants > 1:
-                style_dir = ensure_output_dir(output_dir / style / f"variant_{variant}")
-            else:
-                style_dir = ensure_output_dir(output_dir / style)
-            write_pattern(pattern, style_dir / "pattern.json")
-            run.register("pattern_json", style_dir / "pattern.json", style=style, variant=variant)
-            write_midi(pattern, style_dir / "pattern.mid", velocity_curve=args.midi_velocity_curve)
-            run.register("pattern_midi", style_dir / "pattern.mid", style=style, variant=variant)
-            write_strudel(pattern, style_dir / "pattern.strudel.js")
-            run.register("pattern_strudel", style_dir / "pattern.strudel.js", style=style, variant=variant)
-            hit_count = sum(len(value) for value in pattern.hits.values())
-            label = f"{style} variant {variant}" if args.variants > 1 else style
-            print(f"Generated {label}: {hit_count} hits -> {style_dir}")
-            if args.preview or args.preview_comparison:
-                if args.preview_bars is not None and args.preview_bars < pattern.bars:
-                    preview_controls = GenerationControls(
-                        density=controls.density,
-                        swing=controls.swing,
-                        humanize=controls.humanize,
-                        variation=controls.variation,
-                        source_restraint=controls.source_restraint,
-                        phrase_awareness=controls.phrase_awareness,
-                        groove=controls.groove,
-                        bars=args.preview_bars,
-                        genre=controls.genre,
-                        kick_density=controls.kick_density,
-                        snare_density=controls.snare_density,
-                        hat_density=controls.hat_density,
-                        open_hat_density=controls.open_hat_density,
-                        percussion_density=controls.percussion_density,
-                    )
-                    preview_pattern = generate_pattern(
-                        analysis, style, seed=variant_seed, controls=preview_controls, arrangement=None
-                    )
-                else:
-                    preview_pattern = pattern
-                from .synth import render_preview
-                preview_audio = render_preview(preview_pattern, seed=variant_seed)
-                if args.preview:
-                    preview_path = write_preview(preview_pattern, style_dir / "pattern-preview.wav", seed=variant_seed)
-                    run.register("preview", preview_path, style=style, variant=variant, format="wav")
-                    print(f"  Preview: {preview_path}")
-                if args.preview_comparison:
-                    preview_arrays.append((f"{label}", preview_audio))
-
-    if args.preview_comparison and preview_arrays:
-        gap = int(0.5 * 44100)
-        segments: list[np.ndarray] = []
-        for _name, audio in preview_arrays:
-            segments.append(audio)
-            segments.append(np.zeros(gap, dtype=np.float32))
-        if segments:
-            combined = np.concatenate(segments)
-            comparison_path = output_dir / "comparison.wav"
-            sf.write(comparison_path, combined, 44100)
-            run.register("preview_comparison", comparison_path, format="wav")
-            print(f"Comparison preview ({len(preview_arrays)} styles): {comparison_path}")
+    for generated in result.results:
+        hit_count = sum(len(value) for value in generated.pattern.hits.values())
+        print(f"Generated {generated.label}: {hit_count} hits -> {generated.directory}")
+        if "preview" in generated.artifacts:
+            print(f"  Preview: {generated.artifacts['preview']}")
+    for artifact in result.artifacts:
+        if artifact["artifact_type"] == "preview_comparison":
+            print(f"Comparison preview: {result.run_dir / artifact['path']}")
 
     if arrangement is not None:
         print(f"Generated {generation_bar_count} bars ({args.structure} arrangement).")
     elif bars_explicit:
         print(f"Generated exactly {generation_bar_count} bars.")
 
-    manifest_path = run.write_manifest(
-        {
-            "bpm": args.bpm,
-            "selected_bpm": analysis.bpm,
-            "raw_detected_bpm": analysis.raw_detected_bpm,
-            "tempo_source": analysis.tempo_source,
-            "time_signature": args.time_signature,
-            "beat_grouping": args.beat_grouping,
-            "bars": args.bars,
-            "genre": genre,
-            "style": args.style,
-            "seed": args.seed,
-            "variants": args.variants,
-            "structure": args.structure,
-        }
-    )
-    print(f"Wrote manifest: {manifest_path}")
-    print(f"Output written to: {run.run_dir}")
+    print(f"Wrote manifest: {result.manifest_path}")
+    print(f"Output written to: {result.run_dir}")
 
     for warning in analysis.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
+    return 0
+
+
+def _run_runs(args: argparse.Namespace) -> int:
+    runs = list_run_manifests(args.output, limit=args.limit)
+    if args.json:
+        print(json.dumps(runs, indent=2, default=str))
+        return 0
+    if not runs:
+        print(f"No runs found under: {args.output}")
+        return 0
+    for run in runs:
+        options = run.get("options", {}) if isinstance(run.get("options"), dict) else {}
+        print(
+            f"{run.get('created_at', 'unknown')} | {run.get('command', 'run')} | "
+            f"{run.get('source_filename', 'unknown source')} | "
+            f"bpm={options.get('selected_bpm', 'n/a')} | {run.get('run_directory')}"
+        )
     return 0
 
 
@@ -628,8 +536,10 @@ def main() -> None:
     try:
         if args.command == "analyze":
             result = _run_analyze(args)
-        else:
+        elif args.command == "generate":
             result = _run_generate(args)
+        else:
+            result = _run_runs(args)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         parser.exit(2, f"error: {exc}\n")
     except KeyboardInterrupt:

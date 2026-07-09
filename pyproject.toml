@@ -8,16 +8,23 @@ dependencies = [
     "librosa>=0.11,<0.12",
     "mido>=1.3,<2",
     "numpy>=2,<3",
+    "PySide6>=6.7,<6.9",
     "soundfile>=0.13,<0.14",
 ]
 
 [project.scripts]
 breaksmith = "breaksmith.cli:main"
+breaksmith-gui = "breaksmith.gui:main"
 
 [dependency-groups]
 dev = [
+    "pytest-qt>=4.4,<5",
     "pytest>=8,<9",
     "ruff>=0.12,<0.13",
+]
+
+package = [
+    "pyinstaller>=6,<7",
 ]
 
 [build-system]

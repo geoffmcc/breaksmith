@@ -1,6 +1,6 @@
 # CLI Reference
 
-This document describes every command and option in Breaksmith. Output is deterministic for the same source file, seed, style, and controls.
+This document describes every command and option in Breaksmith. Output is deterministic for the same source file, seed, style, and controls. The CLI remains a first-class, headless interface alongside the desktop GUI.
 
 ## Global Invocation
 
@@ -8,7 +8,7 @@ This document describes every command and option in Breaksmith. Output is determ
 uv run breaksmith <command> [options]
 ```
 
-All commands require a source audio path as the first positional argument.
+Analysis and generation commands require a source audio path as the first positional argument.
 
 ## `breaksmith analyze`
 
@@ -89,7 +89,8 @@ Analyze audio and generate drum patterns.
 ```
 usage: breaksmith generate [-h] [--output OUTPUT]
                            [--style STYLE] [--genre GENRE]
-                           [--seed SEED] [--variants VARIANTS]
+                           [--seed SEED] [--preset PRESET]
+                           [--variants VARIANTS]
                            [--bpm BPM] [--steps-per-bar STEPS_PER_BAR]
                            [--grid-start GRID_START]
                            [--downbeat-start DOWNBEAT_START]
@@ -142,6 +143,11 @@ Arrangement structure.
 - **Values**: `short`, `build-drop`, `minimal`
 - **Default**: none (flat bars, no arrangement)
 - **Example**: `--structure build-drop`
+
+#### `--preset PRESET`
+Load generation settings from a Breaksmith preset JSON file. The explicit positional source and `--output` still apply, so presets can be reused safely across sources and projects.
+- **Type**: path
+- **Example**: `--preset presets/liquid.json`
 
 #### `--bars BARS`
 Number of bars to generate. Must be at least 1. If not provided, matches the source length.
@@ -319,7 +325,7 @@ uv run breaksmith generate "path/to/loop.wav" \
   --phrase-awareness 0.4 \
   --groove mpc \
   --kick-density 0.8 \
-  --hat-density 1.2 \
+  --hat-density 1.0 \
   --midi-velocity-curve compressed \
   --time-signature 4/4 \
   --preview \
@@ -327,12 +333,32 @@ uv run breaksmith generate "path/to/loop.wav" \
   --preview-comparison
 ```
 
-## `breaksmith --version`
+## `breaksmith runs`
 
-Print the version number and exit.
+List previous run manifests under an output parent without recomputing or modifying those runs.
 
 ```bash
-uv run breaksmith --version
+usage: breaksmith runs [-h] [--output OUTPUT] [--limit LIMIT] [--json]
+```
+
+### Options
+
+#### `--output OUTPUT`
+Output parent directory to scan.
+- **Default**: `output`
+
+#### `--limit LIMIT`
+Maximum number of run manifests to return.
+- **Default**: `20`
+
+#### `--json`
+Print machine-readable run manifest summaries as JSON.
+
+Examples:
+
+```bash
+uv run breaksmith runs --output output
+uv run breaksmith runs --output output --json
 ```
 
 ## `breaksmith --help`

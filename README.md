@@ -116,7 +116,7 @@ Options:
 
 | Option | Description | Default |
 |---|---|---|
-| `--output` | Output path for analysis JSON | `analysis.json` |
+| `--output` | Output parent directory; each run gets a unique child directory | `output` |
 | `--bpm` | Override BPM estimation | auto-detected |
 | `--steps-per-bar` | Grid resolution (derived from meter if omitted) | auto (meter-dependent) |
 | `--grid-start` | Manual grid start in seconds | detected |
@@ -138,8 +138,10 @@ uv run breaksmith analyze input.wav --bpm 172 --features-csv features.csv
 
 The output includes:
 
-- **Raw detected BPM** and **Candidate BPMs**: the tracker's raw estimate plus octave-related tempo candidates considered together with grid start.
-- **Selected BPM**: the candidate chosen by whole-bar fit, onset spacing, plausible tempo range, beat confidence, and grid alignment.
+- **Raw detected BPM** and **Candidate BPMs**: the tracker's raw estimate plus bounded half-time/original/double-time octave candidates considered together with grid start.
+- **Selected BPM**: the candidate chosen by named score components: BPM plausibility, onset spacing, bar/beat fit, plausible inferred counts, detector support, raw-tempo proximity, and grid alignment.
+- **Tempo source**: `detected`, `octave-corrected`, or `user-supplied`. Manual `--bpm` is authoritative and is not octave-corrected.
+- **Ambiguity**: if candidates are near-tied, Breaksmith keeps the original detected tempo instead of switching octaves on weak evidence.
 - **Tempo confidence**: how reliable the BPM estimate is. Low with sustained material.
 - **Beat confidence**: how many beat positions were detected vs expected. Low means verify by ear.
 - **Detected beat count**: number of beat positions found.
@@ -422,26 +424,35 @@ The generator does not fill every space with drums. Hits are placed based on sou
 
 ## Output Files
 
-When `generate` writes to a directory, the output tree looks like:
+Every `analyze` and `generate` invocation writes into a new run directory under the output parent. Run names combine a sanitized source stem, command, optional style/genre context, timestamp, and short random suffix, so repeated runs do not overwrite each other.
+
+Analysis output looks like:
 
 ```
 output/
-├── analysis.json                  # Full audio analysis
-├── minimal/
-│   ├── pattern.json               # Drum pattern (hits, velocities, microtiming)
-│   ├── pattern.mid                # Multi-track MIDI (Type 1, GM drum map)
-│   ├── pattern.strudel.js         # Editable Strudel pattern
-│   └── pattern-preview.wav        # Rendered audio preview (with --preview)
-├── rolling/
-│   └── ...
-├── comparison.wav                 # All-style comparison (with --preview-comparison)
-└── liquid/
-    └── variant_0/                  # (with --variants 3)
-        ├── pattern.json
-        └── ...
+└── loop-analyze-20260709-101530-a1b2/
+    ├── analysis.json
+    ├── analysis-click.wav          # with --render-click
+    ├── source-with-click.wav       # with --render-click
+    ├── features.csv                # with --features-csv features.csv
+    └── manifest.json
 ```
 
-When `--style all` is used, all 7 styles for the genre are generated.
+Generation output looks like:
+
+```
+output/
+└── loop-generate-liquid-20260709-101530-a1b2/
+    ├── analysis.json
+    ├── manifest.json
+    └── liquid/
+        ├── pattern.json           # Drum pattern (hits, velocities, microtiming)
+        ├── pattern.mid            # Multi-track MIDI (Type 1, GM drum map)
+        ├── pattern.strudel.js     # Editable Strudel pattern
+        └── pattern-preview.wav    # Rendered audio preview (with --preview)
+```
+
+When `--style all` is used, all styles for the genre are generated inside the same run directory. `manifest.json` records the command, source, selected tempo, options, and relative artifact paths.
 
 See [`docs/OUTPUT_FORMATS.md`](docs/OUTPUT_FORMATS.md) for detailed format descriptions.
 

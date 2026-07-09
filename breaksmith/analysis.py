@@ -8,10 +8,44 @@ from typing import Literal
 import librosa
 import numpy as np
 
-from .models import METER_44, AudioAnalysis, Meter
+from .models import METER_44, AudioAnalysis, Meter, TempoCandidateDiagnostic, TempoScoreComponents
 
 
 DurationFit = Literal["clean", "small_tail", "extra_beat", "partial_bar"]
+
+
+@dataclass(frozen=True, slots=True)
+class TempoScoringConfig:
+    min_bpm: float = 45.0
+    max_bpm: float = 240.0
+    normal_min_bpm: float = 80.0
+    normal_max_bpm: float = 180.0
+    max_candidates: int = 5
+    near_tie_threshold: float = 0.08
+    duplicate_relative_tolerance: float = 0.001
+    octave_shifts: tuple[int, ...] = (-1, 0, 1, 2, 3)
+    weights: dict[str, float] | None = None
+
+    def __post_init__(self) -> None:
+        if self.weights is None:
+            object.__setattr__(
+                self,
+                "weights",
+                {
+                    "bpm_plausibility": 0.16,
+                    "onset_spacing": 0.24,
+                    "bar_fit": 0.18,
+                    "beat_fit": 0.08,
+                    "bar_count_plausibility": 0.10,
+                    "beat_count_plausibility": 0.08,
+                    "raw_proximity": 0.08,
+                    "detector_confidence": 0.04,
+                    "grid_fit": 0.04,
+                },
+            )
+
+
+TEMPO_SCORING = TempoScoringConfig()
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,12 +60,18 @@ class TempoGridSelection:
     expected_beat_count: int
     loop_fit: dict[str, float | int | str | list[str]]
     reason: str
+    octave_shift: int
+    octave_multiplier: float
+    tempo_source: str
+    ambiguous: bool
+    tie_break: str
 
 
 @dataclass(frozen=True, slots=True)
 class TempoGridDiagnostics:
     raw_detected_bpm: float
     candidate_bpm_values: list[float]
+    candidates: list[TempoCandidateDiagnostic]
     selection: TempoGridSelection
 
 
@@ -240,35 +280,49 @@ def _coerce_tempo(value: object) -> float:
     return float(array[0]) if array.size else 0.0
 
 
-def _unique_sorted(values: list[float]) -> list[float]:
-    unique: list[float] = []
-    for value in sorted(values):
-        if value > 0 and all(not math.isclose(value, existing, rel_tol=0.001) for existing in unique):
-            unique.append(value)
-    return unique
+def _octave_multiplier(octave_shift: int) -> float:
+    return float(2**octave_shift) if octave_shift >= 0 else 1.0 / float(2 ** abs(octave_shift))
 
 
-def _tempo_candidates(raw_bpm: float, bpm_override: float | None) -> list[float]:
+def _tempo_candidate_specs(
+    raw_bpm: float,
+    bpm_override: float | None,
+    config: TempoScoringConfig = TEMPO_SCORING,
+) -> list[tuple[float, int, float, bool, str]]:
     if bpm_override is not None:
-        return [float(bpm_override)]
+        return [(float(bpm_override), 0, 1.0, True, "")]
     if not math.isfinite(raw_bpm) or raw_bpm <= 0:
-        return [172.0]
+        return [(172.0, 0, 1.0, True, "detector did not return a finite positive BPM")]
 
-    candidates = [raw_bpm]
-    for octave in range(-4, 5):
-        candidates.append(raw_bpm * (2**octave))
+    specs: list[tuple[float, int, float, bool, str]] = []
+    accepted_bpms: list[float] = []
+    for shift in config.octave_shifts:
+        multiplier = _octave_multiplier(shift)
+        bpm = raw_bpm * multiplier
+        duplicate = any(
+            math.isclose(bpm, existing, rel_tol=config.duplicate_relative_tolerance)
+            for existing in accepted_bpms
+        )
+        if duplicate:
+            specs.append((bpm, shift, multiplier, False, "duplicate octave candidate"))
+            continue
+        if bpm < config.min_bpm or bpm > config.max_bpm:
+            specs.append((bpm, shift, multiplier, False, "outside supported BPM range"))
+            continue
+        if len(accepted_bpms) >= config.max_candidates:
+            specs.append((bpm, shift, multiplier, False, "candidate limit reached"))
+            continue
+        accepted_bpms.append(bpm)
+        specs.append((bpm, shift, multiplier, True, ""))
+    return specs
 
-    # Keep octave relatives that are musically useful while avoiding extreme grids.
-    plausible = [value for value in candidates if 45.0 <= value <= 240.0]
-    return _unique_sorted(plausible or candidates)
 
-
-def _plausible_bpm_score(bpm: float) -> float:
-    if 80.0 <= bpm <= 180.0:
+def _plausible_bpm_score(bpm: float, config: TempoScoringConfig = TEMPO_SCORING) -> float:
+    if config.normal_min_bpm <= bpm <= config.normal_max_bpm:
         return 1.0
     if 60.0 <= bpm <= 220.0:
         return 0.75
-    if 45.0 <= bpm <= 240.0:
+    if config.min_bpm <= bpm <= config.max_bpm:
         return 0.45
     return 0.0
 
@@ -288,6 +342,22 @@ def _bar_fit_score(loop_fit: dict[str, float | int | str | list[str]]) -> float:
         return 0.0
     nearest_boundary = min(remainder, max(0.0, bar_duration - remainder))
     return max(0.0, 1.0 - nearest_boundary / (bar_duration * 0.5))
+
+
+def _beat_fit_score(error_seconds: float, beat_duration: float) -> float:
+    if beat_duration <= 0:
+        return 0.0
+    return max(0.0, 1.0 - error_seconds / (beat_duration * 0.5))
+
+
+def _count_plausibility(count: float, *, ideal_min: int, ideal_max: int) -> float:
+    if count <= 0:
+        return 0.0
+    if ideal_min <= count <= ideal_max:
+        return 1.0
+    if count < ideal_min:
+        return max(0.35, count / ideal_min)
+    return max(0.35, 1.0 - (count - ideal_max) / ideal_max)
 
 
 def _onset_spacing_score(beat_times: np.ndarray, bpm: float, meter: Meter) -> float:
@@ -316,6 +386,27 @@ def _onset_spacing_score(beat_times: np.ndarray, bpm: float, meter: Meter) -> fl
     return min(1.0, best)
 
 
+def _onset_evidence_label(beat_times: np.ndarray, bpm: float, meter: Meter) -> str:
+    if beat_times.size < 2 or bpm <= 0:
+        return "unavailable"
+    intervals = np.diff(beat_times)
+    intervals = intervals[intervals > 0.02]
+    if intervals.size == 0:
+        return "unavailable"
+    median_interval = float(np.median(intervals))
+    beat_duration = meter.beat_duration(bpm)
+    if beat_duration <= 0:
+        return "unavailable"
+    ratio = median_interval / beat_duration
+    if abs(ratio - 1.0) <= 0.15:
+        return "primary-beat spacing"
+    if abs(ratio - 2.0) <= 0.20:
+        return "half-time beat spacing"
+    if abs(ratio - meter.primary_beats_per_bar) <= 0.35:
+        return "bar/downbeat spacing"
+    return f"spacing ratio {ratio:.2f} beats"
+
+
 def _grid_alignment_score(beat_times: np.ndarray, bpm: float, grid_start: float, meter: Meter) -> float:
     if beat_times.size == 0 or bpm <= 0:
         return 0.75 if math.isclose(grid_start, 0.0, abs_tol=0.001) else 0.5
@@ -328,6 +419,30 @@ def _grid_alignment_score(beat_times: np.ndarray, bpm: float, grid_start: float,
     offsets = np.mod(usable - grid_start, beat_duration)
     distances = np.minimum(offsets, beat_duration - offsets) / beat_duration
     return max(0.0, 1.0 - float(np.mean(np.clip(distances, 0.0, 0.5))) * 2.0)
+
+
+def _detector_confidence_for_candidate(
+    *,
+    beat_times: np.ndarray,
+    duration: float,
+    grid_start: float,
+    bpm: float,
+    meter: Meter,
+) -> tuple[float, int]:
+    beat_duration = meter.beat_duration(bpm)
+    if beat_duration <= 0:
+        return 0.0, 1
+    expected_beats = max(1, round(max(0.0, duration - grid_start) / beat_duration))
+    confidence = min(1.0, int(beat_times.size) / expected_beats)
+    return confidence, expected_beats
+
+
+def _candidate_score(components: TempoScoreComponents, config: TempoScoringConfig) -> float:
+    weights = config.weights or {}
+    return sum(
+        getattr(components, name) * weight
+        for name, weight in weights.items()
+    )
 
 
 def _grid_start_candidates(
@@ -344,7 +459,7 @@ def _grid_start_candidates(
     candidates: list[tuple[float, str]] = [(0.0, "audio_start")]
     if beat_times.size >= 2:
         first = float(beat_times[0])
-        if 0.0 <= first < duration:
+        if 0.0 <= first < duration and not math.isclose(first, 0.0, abs_tol=0.001):
             candidates.append((first, "detected"))
     return candidates
 
@@ -360,14 +475,8 @@ def select_tempo_grid(
     grid_start_override: float | None = None,
     downbeat_override: float | None = None,
 ) -> TempoGridDiagnostics:
-    """Score tempo-octave and grid-start pairs as one decision.
-
-    Librosa often reports a metrical octave rather than the intended beat unit. The
-    selected pair balances whole-bar duration fit, detected onset spacing, plausible
-    BPM range, beat-count support, and grid alignment so a tiny detected offset does
-    not beat an exact zero-start loop unless the pickup evidence is stronger.
-    """
-    bpm_values = _tempo_candidates(raw_detected_bpm, bpm_override)
+    """Score bounded tempo-octave and grid-start pairs as one conservative decision."""
+    config = TEMPO_SCORING
     grid_values = _grid_start_candidates(
         beat_times=beat_times_detected,
         duration=duration,
@@ -375,13 +484,57 @@ def select_tempo_grid(
         downbeat_override=downbeat_override,
     )
     selections: list[TempoGridSelection] = []
+    diagnostics: list[TempoCandidateDiagnostic] = []
 
-    for bpm in bpm_values:
+    for bpm, octave_shift, octave_multiplier, valid, rejection_reason in _tempo_candidate_specs(
+        raw_detected_bpm,
+        bpm_override,
+        config,
+    ):
+        if not valid:
+            diagnostics.append(
+                TempoCandidateDiagnostic(
+                    bpm=round(float(bpm), 4),
+                    valid=False,
+                    octave_shift=octave_shift,
+                    octave_multiplier=round(float(octave_multiplier), 6),
+                    rejection_reason=rejection_reason,
+                    rationale=rejection_reason,
+                )
+            )
+            continue
         beat_duration = meter.beat_duration(bpm)
+        bar_duration = meter.bar_duration(bpm)
+        if beat_duration <= 0 or bar_duration <= 0:
+            diagnostics.append(
+                TempoCandidateDiagnostic(
+                    bpm=round(float(bpm), 4),
+                    valid=False,
+                    octave_shift=octave_shift,
+                    octave_multiplier=round(float(octave_multiplier), 6),
+                    rejection_reason="invalid beat or bar duration",
+                    rationale="invalid beat or bar duration",
+                )
+            )
+            continue
+
         spacing_score = _onset_spacing_score(beat_times_detected, bpm, meter)
-        plausible_score = _plausible_bpm_score(bpm)
+        plausible_score = _plausible_bpm_score(bpm, config)
+        raw_proximity = max(0.0, 1.0 - abs(octave_shift) / max(1, max(abs(s) for s in config.octave_shifts)))
         for grid_start, source in grid_values:
             if grid_start >= duration:
+                diagnostics.append(
+                    TempoCandidateDiagnostic(
+                        bpm=round(float(bpm), 4),
+                        valid=False,
+                        octave_shift=octave_shift,
+                        octave_multiplier=round(float(octave_multiplier), 6),
+                        grid_start_seconds=round(float(grid_start), 6),
+                        grid_start_source=source,
+                        rejection_reason="grid start is outside source duration",
+                        rationale="grid start is outside source duration",
+                    )
+                )
                 continue
             loop_fit = calculate_loop_fit(
                 duration_seconds=duration,
@@ -391,19 +544,62 @@ def select_tempo_grid(
                 meter=meter,
             )
             effective_duration = max(0.0, duration - grid_start)
-            expected_beats = max(1, round(effective_duration / beat_duration))
-            beat_confidence = min(1.0, int(beat_times_detected.size) / expected_beats)
-            bar_score = _bar_fit_score(loop_fit)
-            grid_score = _grid_alignment_score(beat_times_detected, bpm, grid_start, meter)
-            zero_start_bonus = 0.04 if math.isclose(grid_start, 0.0, abs_tol=0.001) else 0.0
-            score = (
-                bar_score * 0.4
-                + spacing_score * 0.25
-                + beat_confidence * 0.15
-                + grid_score * 0.1
-                + plausible_score * 0.1
-                + zero_start_bonus
+            inferred_beats = effective_duration / beat_duration
+            inferred_bars = effective_duration / bar_duration
+            nearest_beats = max(1, round(inferred_beats))
+            nearest_bars = max(1, round(inferred_bars))
+            beat_fit_error = abs(effective_duration - nearest_beats * beat_duration)
+            bar_fit_error = abs(effective_duration - nearest_bars * bar_duration)
+            beat_confidence, expected_beats = _detector_confidence_for_candidate(
+                beat_times=beat_times_detected,
+                duration=duration,
+                grid_start=grid_start,
+                bpm=bpm,
+                meter=meter,
             )
+            bar_score = _bar_fit_score(loop_fit)
+            beat_score = _beat_fit_score(beat_fit_error, beat_duration)
+            grid_score = _grid_alignment_score(beat_times_detected, bpm, grid_start, meter)
+            bar_count_score = _count_plausibility(inferred_bars, ideal_min=2, ideal_max=64)
+            beat_count_score = _count_plausibility(inferred_beats, ideal_min=meter.primary_beats_per_bar * 2, ideal_max=256)
+            components = TempoScoreComponents(
+                bpm_plausibility=plausible_score,
+                onset_spacing=spacing_score,
+                bar_fit=bar_score,
+                beat_fit=beat_score,
+                bar_count_plausibility=bar_count_score,
+                beat_count_plausibility=beat_count_score,
+                raw_proximity=raw_proximity,
+                detector_confidence=beat_confidence,
+                grid_fit=grid_score,
+            )
+            score = _candidate_score(components, config)
+            onset_label = _onset_evidence_label(beat_times_detected, bpm, meter)
+            rationale = (
+                f"bar_fit={bar_score:.2f}, beat_fit={beat_score:.2f}, "
+                f"onset_spacing={spacing_score:.2f}, bpm_plausibility={plausible_score:.2f}"
+            )
+            diagnostic = TempoCandidateDiagnostic(
+                bpm=round(float(bpm), 4),
+                valid=True,
+                octave_shift=octave_shift,
+                octave_multiplier=round(float(octave_multiplier), 6),
+                grid_start_seconds=round(float(grid_start), 6),
+                grid_start_source=source,
+                total_score=round(float(score), 6),
+                score_components=components,
+                inferred_beats=round(float(inferred_beats), 6),
+                inferred_bars=round(float(inferred_bars), 6),
+                nearest_whole_beats=nearest_beats,
+                nearest_whole_bars=nearest_bars,
+                beat_fit_error_seconds=round(float(beat_fit_error), 6),
+                bar_fit_error_seconds=round(float(bar_fit_error), 6),
+                fit_classification=str(loop_fit["duration_fit"]),
+                onset_evidence=onset_label,
+                confidence_contribution=round(float(beat_confidence), 6),
+                rationale=rationale,
+            )
+            diagnostics.append(diagnostic)
             selections.append(
                 TempoGridSelection(
                     bpm=bpm,
@@ -415,20 +611,76 @@ def select_tempo_grid(
                     beat_confidence=beat_confidence,
                     expected_beat_count=expected_beats,
                     loop_fit=loop_fit,
-                    reason=(
-                        f"bar_fit={bar_score:.2f}, onset_spacing={spacing_score:.2f}, "
-                        f"beat_confidence={beat_confidence:.2f}, grid_fit={grid_score:.2f}"
-                    ),
+                    reason=rationale,
+                    octave_shift=octave_shift,
+                    octave_multiplier=octave_multiplier,
+                    tempo_source="user-supplied" if bpm_override is not None else "detected",
+                    ambiguous=False,
+                    tie_break="highest score",
                 )
             )
 
     if not selections:
         raise ValueError("No valid tempo/grid candidates were available")
 
-    selection = max(selections, key=lambda candidate: candidate.score)
+    best = max(selections, key=lambda candidate: candidate.score)
+    original_candidates = [candidate for candidate in selections if candidate.octave_shift == 0]
+    original = max(original_candidates, key=lambda candidate: candidate.score) if original_candidates else None
+    ambiguous = False
+    tie_break = "highest score"
+    if bpm_override is None and original is not None and best.octave_shift != 0:
+        improvement = best.score - original.score
+        if improvement < config.near_tie_threshold:
+            best = original
+            ambiguous = True
+            tie_break = (
+                f"retained original tempo; best octave improvement {improvement:.3f} "
+                f"below {config.near_tie_threshold:.3f} threshold"
+            )
+        else:
+            tie_break = f"octave candidate improved score by {improvement:.3f}"
+    else:
+        near = [
+            candidate for candidate in selections
+            if abs(candidate.score - best.score) < config.near_tie_threshold
+        ]
+        ambiguous = len(near) > 1
+        if ambiguous and bpm_override is None:
+            tie_break = "near-tie resolved by original/fewer octave shifts/deterministic ordering"
+
+    tempo_source = "user-supplied" if bpm_override is not None else (
+        "octave-corrected" if best.octave_shift != 0 else "detected"
+    )
+    selection = TempoGridSelection(
+        bpm=best.bpm,
+        grid_start_seconds=best.grid_start_seconds,
+        grid_start_source=best.grid_start_source,
+        score=best.score,
+        bar_fit_score=best.bar_fit_score,
+        onset_spacing_score=best.onset_spacing_score,
+        beat_confidence=best.beat_confidence,
+        expected_beat_count=best.expected_beat_count,
+        loop_fit=best.loop_fit,
+        reason=best.reason,
+        octave_shift=best.octave_shift,
+        octave_multiplier=best.octave_multiplier,
+        tempo_source=tempo_source,
+        ambiguous=ambiguous,
+        tie_break=tie_break,
+    )
+    for diagnostic in diagnostics:
+        if diagnostic.valid and math.isclose(diagnostic.bpm, selection.bpm, rel_tol=0.0001) and math.isclose(
+            diagnostic.grid_start_seconds,
+            selection.grid_start_seconds,
+            abs_tol=0.000001,
+        ):
+            diagnostic.tie_break_outcome = "selected"
+        elif diagnostic.valid and diagnostic.octave_shift == 0 and ambiguous:
+            diagnostic.tie_break_outcome = "retained by ambiguity policy"
     return TempoGridDiagnostics(
         raw_detected_bpm=raw_detected_bpm,
-        candidate_bpm_values=[round(value, 4) for value in bpm_values],
+        candidate_bpm_values=sorted({candidate.bpm for candidate in diagnostics if candidate.valid}),
+        candidates=diagnostics,
         selection=selection,
     )
 
@@ -609,4 +861,11 @@ def analyze_audio(
         tempo_selection_score=round(float(selection.score), 6),
         tempo_selection_reason=selection.reason,
         bar_fit_score=round(float(selection.bar_fit_score), 6),
+        tempo_source=selection.tempo_source,
+        octave_correction_applied=selection.octave_shift != 0 and bpm_override is None,
+        octave_multiplier=round(float(selection.octave_multiplier), 6),
+        octave_shift=selection.octave_shift,
+        tempo_ambiguous=selection.ambiguous,
+        tempo_tie_break=selection.tie_break,
+        tempo_candidates=tempo_grid.candidates,
     )

@@ -297,6 +297,43 @@ def validate_style_genre(style: str, genre: str) -> None:
 
 
 @dataclass(slots=True)
+class TempoScoreComponents:
+    bpm_plausibility: float = 0.0
+    onset_spacing: float = 0.0
+    bar_fit: float = 0.0
+    beat_fit: float = 0.0
+    bar_count_plausibility: float = 0.0
+    beat_count_plausibility: float = 0.0
+    raw_proximity: float = 0.0
+    detector_confidence: float = 0.0
+    grid_fit: float = 0.0
+
+
+@dataclass(slots=True)
+class TempoCandidateDiagnostic:
+    bpm: float
+    valid: bool
+    octave_shift: int
+    octave_multiplier: float
+    grid_start_seconds: float = 0.0
+    grid_start_source: str = "audio_start"
+    rejection_reason: str = ""
+    total_score: float = 0.0
+    score_components: TempoScoreComponents = field(default_factory=TempoScoreComponents)
+    inferred_beats: float = 0.0
+    inferred_bars: float = 0.0
+    nearest_whole_beats: int = 0
+    nearest_whole_bars: int = 0
+    beat_fit_error_seconds: float = 0.0
+    bar_fit_error_seconds: float = 0.0
+    fit_classification: str = "partial_bar"
+    onset_evidence: str = "unavailable"
+    confidence_contribution: float = 0.0
+    tie_break_outcome: str = ""
+    rationale: str = ""
+
+
+@dataclass(slots=True)
 class AudioAnalysis:
     source: str
     duration_seconds: float
@@ -348,6 +385,13 @@ class AudioAnalysis:
     tempo_selection_score: float = 0.0
     tempo_selection_reason: str = ""
     bar_fit_score: float = 0.0
+    tempo_source: str = "detected"
+    octave_correction_applied: bool = False
+    octave_multiplier: float = 1.0
+    octave_shift: int = 0
+    tempo_ambiguous: bool = False
+    tempo_tie_break: str = ""
+    tempo_candidates: list[TempoCandidateDiagnostic] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

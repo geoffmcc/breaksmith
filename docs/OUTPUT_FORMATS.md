@@ -1,29 +1,21 @@
 # Output Formats
 
-Breaksmith writes three primary output formats (MIDI, JSON, Strudel) plus optional rendered audio previews. All outputs are written to `output/<style>/` (or `output/<style>/variant_N/` when `--variants > 1`).
+Breaksmith writes three primary output formats (MIDI, JSON, Strudel) plus optional rendered audio previews. Each invocation creates a unique run directory under the output parent, then writes artifacts inside that run directory.
 
 ## Output Directory Structure
 
-```
+```text
 output/
-├── analysis.json                          # Full audio analysis (from analyze step)
-├── comparison.wav                         # Concatenated preview of all styles (with --preview-comparison)
-├── minimal/
-│   ├── pattern.json                       # Full drum pattern
-│   ├── pattern.mid                        # Multi-track MIDI (Type 1)
-│   ├── pattern.strudel.js                 # Strudel-compatible pattern
-│   └── pattern-preview.wav                # Rendered audio preview (with --preview)
-├── rolling/
-│   ├── pattern.json
-│   ├── pattern.mid
-│   ├── pattern.strudel.js
-│   └── pattern-preview.wav
-└── liquid/
-    └── variant_0/                         # (only with --variants 3)
-        ├── pattern.json
-        ├── pattern.mid
-        ├── pattern.strudel.js
-        └── pattern-preview.wav
+└── loop-generate-liquid-20260709-101530-a1b2/
+    ├── analysis.json                      # Full audio analysis
+    ├── manifest.json                      # Run provenance and artifact index
+    ├── comparison.wav                     # With --preview-comparison
+    └── liquid/
+        └── variant_0/                     # With --variants > 1
+            ├── pattern.json               # Full drum pattern
+            ├── pattern.mid                # Multi-track MIDI (Type 1)
+            ├── pattern.strudel.js         # Strudel-compatible pattern
+            └── pattern-preview.wav        # With --preview
 ```
 
 ## MIDI (`pattern.mid`)

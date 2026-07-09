@@ -13,7 +13,7 @@ from mido import MidiFile
 
 import breaksmith
 import breaksmith.cli as cli
-from breaksmith.analysis import calculate_loop_fit, extract_activity_maps
+from breaksmith.analysis import calculate_loop_fit, extract_activity_maps, select_tempo_grid
 from breaksmith.click import render_click_tracks
 from breaksmith.cli import build_parser
 from breaksmith.exporters.json_export import write_pattern
@@ -103,6 +103,94 @@ def analysis_with_loop_duration(duration_seconds: float) -> AudioAnalysis:
 
 def bars_duration(bars: float, bpm: float = 172.0) -> float:
     return bars * 4 * 60 / bpm
+
+
+def test_tempo_grid_selection_prefers_100_bpm_clean_zero_start_loop() -> None:
+    selection = select_tempo_grid(
+        raw_detected_bpm=25.0,
+        beat_times_detected=np.array([0.035, 2.435, 4.835, 7.235, 9.595]),
+        duration=9.6,
+        steps_per_bar=16,
+        meter=METER_44,
+    ).selection
+
+    assert selection.bpm == pytest.approx(100.0)
+    assert selection.grid_start_seconds == pytest.approx(0.0)
+    assert selection.loop_fit["duration_fit"] == "clean"
+    assert selection.loop_fit["complete_bar_count"] == 4
+
+
+def test_tempo_grid_selection_preserves_true_200_bpm_loop() -> None:
+    beat_times = np.arange(16, dtype=float) * 0.3
+    selection = select_tempo_grid(
+        raw_detected_bpm=200.0,
+        beat_times_detected=beat_times,
+        duration=4.8,
+        steps_per_bar=16,
+        meter=METER_44,
+    ).selection
+
+    assert selection.bpm == pytest.approx(200.0)
+    assert selection.loop_fit["duration_fit"] == "clean"
+    assert selection.loop_fit["complete_bar_count"] == 4
+
+
+def test_tempo_grid_selection_preserves_real_pickup() -> None:
+    beat_times = 0.6 + np.arange(16, dtype=float) * 0.6
+    selection = select_tempo_grid(
+        raw_detected_bpm=100.0,
+        beat_times_detected=beat_times,
+        duration=10.2,
+        steps_per_bar=16,
+        meter=METER_44,
+    ).selection
+
+    assert selection.bpm == pytest.approx(100.0)
+    assert selection.grid_start_seconds == pytest.approx(0.6)
+    assert selection.grid_start_source == "detected"
+    assert selection.loop_fit["duration_fit"] == "clean"
+
+
+def test_tempo_grid_selection_uses_onsets_when_octaves_fit_similarly() -> None:
+    beat_times = np.arange(8, dtype=float) * 0.6
+    selection = select_tempo_grid(
+        raw_detected_bpm=200.0,
+        beat_times_detected=beat_times,
+        duration=4.8,
+        steps_per_bar=16,
+        meter=METER_44,
+    ).selection
+
+    assert selection.bpm == pytest.approx(100.0)
+    assert selection.loop_fit["duration_fit"] == "clean"
+
+
+def test_tempo_grid_selection_respects_manual_bpm_override() -> None:
+    diagnostics = select_tempo_grid(
+        raw_detected_bpm=25.0,
+        beat_times_detected=np.array([0.0, 0.5, 1.0, 1.5]),
+        duration=4.8,
+        steps_per_bar=16,
+        meter=METER_44,
+        bpm_override=150.0,
+    )
+
+    assert diagnostics.candidate_bpm_values == [150.0]
+    assert diagnostics.selection.bpm == pytest.approx(150.0)
+
+
+def test_tempo_grid_selection_respects_manual_grid_start_override() -> None:
+    selection = select_tempo_grid(
+        raw_detected_bpm=100.0,
+        beat_times_detected=np.arange(8, dtype=float) * 0.6,
+        duration=5.3,
+        steps_per_bar=16,
+        meter=METER_44,
+        grid_start_override=0.5,
+    ).selection
+
+    assert selection.grid_start_seconds == pytest.approx(0.5)
+    assert selection.grid_start_source == "manual_grid_start"
 
 
 def test_activity_maps_distinguish_low_and_high_frequency_regions() -> None:

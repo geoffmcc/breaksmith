@@ -34,14 +34,16 @@ usage: breaksmith analyze [-h] [--output OUTPUT] [--bpm BPM]
 ### Options
 
 #### `--output OUTPUT`
-Path for the analysis JSON output.
-- **Default**: `analysis.json`
-- **Example**: `--output my-analysis.json`
+Output parent directory. Breaksmith creates a unique child run directory and writes `analysis.json`, optional click files, optional feature CSV, and `manifest.json` there. If a file-like path such as `my-analysis.json` is supplied, its parent is used as the run parent and the analysis artifact keeps that filename inside the run directory.
+- **Default**: `output`
+- **Example**: `--output analyses`
 
 #### `--bpm BPM`
 Override auto-detected BPM. Use when the source has weak transients or unsteady tempo.
 - **Type**: positive float
 - **Example**: `--bpm 172`
+
+When omitted, Breaksmith evaluates bounded octave candidates around the detected tempo, normally half-time, original-time, and double-time. Duration fit, onset spacing, meter-aware bar/beat geometry, inferred count plausibility, and raw-tempo proximity are scored. Near-tied candidates retain the original detected tempo. Manual BPM is authoritative and is not octave-corrected.
 
 #### `--steps-per-bar STEPS_PER_BAR`
 Grid resolution. Must be a multiple of 4.
@@ -119,7 +121,7 @@ usage: breaksmith generate [-h] [--output OUTPUT]
 ### General Options
 
 #### `--output OUTPUT`
-Base output directory. A subdirectory is created for each style (and each variant).
+Base output parent directory. A unique child run directory is created for each invocation, then style and variant subdirectories are created inside that run directory.
 - **Default**: `output`
 - **Example**: `--output my-beats`
 

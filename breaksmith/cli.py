@@ -34,6 +34,7 @@ from .models import (
     validate_beat_grouping,
     validate_style_genre,
 )
+from .run import allocate_run_context
 from .synth import write_preview
 
 
@@ -139,7 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     analyze_parser = subparsers.add_parser("analyze", help="Analyze an audio file")
     analyze_parser.add_argument("audio", type=Path)
-    analyze_parser.add_argument("--output", type=Path, default=Path("analysis.json"))
+    analyze_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("output"),
+        help="Output parent directory; each run gets a unique child directory",
+    )
     analyze_parser.add_argument("--bpm", type=_positive_bpm, help="Override tempo estimation")
     analyze_parser.add_argument("--steps-per-bar", type=int, default=None)
     analyze_parser.add_argument(
@@ -185,7 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=Path("output"),
-        help="Output directory",
+        help="Output parent directory; each run gets a unique child directory",
     )
     generate_parser.add_argument(
         "--style",
@@ -345,33 +351,64 @@ def _run_analyze(args: argparse.Namespace) -> int:
         downbeat_override=args.downbeat_start,
         meter=meter,
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    write_analysis(analysis, args.output)
+    output_parent = args.output.parent if args.output.suffix else args.output
+    analysis_filename = args.output.name if args.output.suffix else "analysis.json"
+    run = allocate_run_context(command="analyze", source=args.audio, parent_dir=output_parent)
+    analysis_path = run.path(analysis_filename)
+    write_analysis(analysis, analysis_path)
+    run.register("analysis", analysis_path, format="json")
     print(f"Source: {args.audio}")
     print(f"BPM: {analysis.bpm:.2f}")
     print(f"Duration: {analysis.duration_seconds:.2f}s")
     _print_loop_diagnostics(analysis)
     _print_feature_summary(analysis)
     print(f"Detected output grid: {analysis.bar_count} bars")
-    print(f"Wrote: {args.output}")
+    print(f"Wrote: {analysis_path}")
     if args.features_csv:
-        args.features_csv.parent.mkdir(parents=True, exist_ok=True)
-        write_feature_csv(analysis, args.features_csv)
-        print(f"Wrote feature CSV: {args.features_csv}")
+        features_path = run.path(args.features_csv.name)
+        write_feature_csv(analysis, features_path)
+        run.register("features_csv", features_path, format="csv")
+        print(f"Wrote feature CSV: {features_path}")
     if args.render_click:
-        click_path, mixed_path = render_click_tracks(args.audio, analysis, args.output.parent)
+        click_path, mixed_path = render_click_tracks(args.audio, analysis, run.run_dir)
+        run.register("click", click_path, format="wav")
+        run.register("source_with_click", mixed_path, format="wav")
         print(f"Wrote click: {click_path}")
         print(f"Wrote source with click: {mixed_path}")
+    manifest_path = run.write_manifest(
+        {
+            "bpm": args.bpm,
+            "steps_per_bar": args.steps_per_bar,
+            "grid_start": args.grid_start,
+            "downbeat_start": args.downbeat_start,
+            "time_signature": args.time_signature,
+            "beat_grouping": args.beat_grouping,
+            "render_click": args.render_click,
+            "features_csv": args.features_csv.name if args.features_csv else None,
+            "raw_detected_bpm": analysis.raw_detected_bpm,
+            "selected_bpm": analysis.bpm,
+            "tempo_source": analysis.tempo_source,
+        }
+    )
+    print(f"Wrote manifest: {manifest_path}")
+    print(f"Output written to: {run.run_dir}")
     for warning in analysis.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
     return 0
 
 
 def _run_generate(args: argparse.Namespace) -> int:
-    output_dir = ensure_output_dir(args.output)
     meter = parse_time_signature(args.time_signature)
     if args.beat_grouping is not None:
         meter = validate_beat_grouping(meter, args.beat_grouping)
+    run_style = args.style if args.style != "all" else args.genre or "all"
+    run = allocate_run_context(
+        command="generate",
+        source=args.audio,
+        parent_dir=args.output,
+        style=run_style,
+    )
+    output_dir = run.run_dir
     analysis = analyze_audio(
         args.audio,
         steps_per_bar=args.steps_per_bar or meter.steps_per_bar,
@@ -382,6 +419,7 @@ def _run_generate(args: argparse.Namespace) -> int:
     )
     analysis_path = output_dir / "analysis.json"
     write_analysis(analysis, analysis_path)
+    run.register("analysis", analysis_path, format="json")
 
     arrangement: tuple[Section, ...] | None = None
     bars_explicit = args.bars is not None
@@ -439,9 +477,9 @@ def _run_generate(args: argparse.Namespace) -> int:
         f"Grid start: {analysis.grid_start_seconds:.3f}s "
         f"({analysis.grid_start_source}); downbeat: {analysis.downbeat_seconds:.3f}s"
     )
-    print(f"Grid: {analysis.bar_count} analyzed bars × {analysis.steps_per_bar} steps")
+    print(f"Grid: {analysis.bar_count} analyzed bars x {analysis.steps_per_bar} steps")
     if arrangement is not None:
-        sections_desc = " → ".join(f"{s.name}({s.bar_count}b)" for s in arrangement)
+        sections_desc = " -> ".join(f"{s.name}({s.bar_count}b)" for s in arrangement)
         print(f"Arrangement: {sections_desc} ({generation_bar_count} total bars)")
     elif not bars_explicit:
         print(f"Generating {generation_bar_count} bars because --bars was not specified.")
@@ -502,11 +540,14 @@ def _run_generate(args: argparse.Namespace) -> int:
             else:
                 style_dir = ensure_output_dir(output_dir / style)
             write_pattern(pattern, style_dir / "pattern.json")
+            run.register("pattern_json", style_dir / "pattern.json", style=style, variant=variant)
             write_midi(pattern, style_dir / "pattern.mid", velocity_curve=args.midi_velocity_curve)
+            run.register("pattern_midi", style_dir / "pattern.mid", style=style, variant=variant)
             write_strudel(pattern, style_dir / "pattern.strudel.js")
+            run.register("pattern_strudel", style_dir / "pattern.strudel.js", style=style, variant=variant)
             hit_count = sum(len(value) for value in pattern.hits.values())
             label = f"{style} variant {variant}" if args.variants > 1 else style
-            print(f"Generated {label}: {hit_count} hits → {style_dir}")
+            print(f"Generated {label}: {hit_count} hits -> {style_dir}")
             if args.preview or args.preview_comparison:
                 if args.preview_bars is not None and args.preview_bars < pattern.bars:
                     preview_controls = GenerationControls(
@@ -534,6 +575,7 @@ def _run_generate(args: argparse.Namespace) -> int:
                 preview_audio = render_preview(preview_pattern, seed=variant_seed)
                 if args.preview:
                     preview_path = write_preview(preview_pattern, style_dir / "pattern-preview.wav", seed=variant_seed)
+                    run.register("preview", preview_path, style=style, variant=variant, format="wav")
                     print(f"  Preview: {preview_path}")
                 if args.preview_comparison:
                     preview_arrays.append((f"{label}", preview_audio))
@@ -548,12 +590,32 @@ def _run_generate(args: argparse.Namespace) -> int:
             combined = np.concatenate(segments)
             comparison_path = output_dir / "comparison.wav"
             sf.write(comparison_path, combined, 44100)
+            run.register("preview_comparison", comparison_path, format="wav")
             print(f"Comparison preview ({len(preview_arrays)} styles): {comparison_path}")
 
     if arrangement is not None:
         print(f"Generated {generation_bar_count} bars ({args.structure} arrangement).")
     elif bars_explicit:
         print(f"Generated exactly {generation_bar_count} bars.")
+
+    manifest_path = run.write_manifest(
+        {
+            "bpm": args.bpm,
+            "selected_bpm": analysis.bpm,
+            "raw_detected_bpm": analysis.raw_detected_bpm,
+            "tempo_source": analysis.tempo_source,
+            "time_signature": args.time_signature,
+            "beat_grouping": args.beat_grouping,
+            "bars": args.bars,
+            "genre": genre,
+            "style": args.style,
+            "seed": args.seed,
+            "variants": args.variants,
+            "structure": args.structure,
+        }
+    )
+    print(f"Wrote manifest: {manifest_path}")
+    print(f"Output written to: {run.run_dir}")
 
     for warning in analysis.warnings:
         print(f"Warning: {warning}", file=sys.stderr)

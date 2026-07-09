@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 from types import SimpleNamespace
 from pathlib import Path
@@ -31,6 +32,7 @@ from breaksmith.models import (
     parse_time_signature,
     validate_beat_grouping,
 )
+from breaksmith.run import allocate_run_context, sanitize_run_component
 from breaksmith.synth import (
     INSTRUMENT_DURATIONS,
     INSTRUMENT_RENDERERS,
@@ -105,6 +107,12 @@ def bars_duration(bars: float, bpm: float = 172.0) -> float:
     return bars * 4 * 60 / bpm
 
 
+def only_run_dir(parent: Path) -> Path:
+    dirs = [path for path in parent.iterdir() if path.is_dir()]
+    assert len(dirs) == 1
+    return dirs[0]
+
+
 def test_tempo_grid_selection_prefers_100_bpm_clean_zero_start_loop() -> None:
     selection = select_tempo_grid(
         raw_detected_bpm=25.0,
@@ -151,7 +159,7 @@ def test_tempo_grid_selection_preserves_real_pickup() -> None:
     assert selection.loop_fit["duration_fit"] == "clean"
 
 
-def test_tempo_grid_selection_uses_onsets_when_octaves_fit_similarly() -> None:
+def test_tempo_grid_selection_retains_original_when_octaves_fit_similarly() -> None:
     beat_times = np.arange(8, dtype=float) * 0.6
     selection = select_tempo_grid(
         raw_detected_bpm=200.0,
@@ -161,8 +169,22 @@ def test_tempo_grid_selection_uses_onsets_when_octaves_fit_similarly() -> None:
         meter=METER_44,
     ).selection
 
-    assert selection.bpm == pytest.approx(100.0)
+    assert selection.bpm == pytest.approx(200.0)
+    assert selection.ambiguous is True
     assert selection.loop_fit["duration_fit"] == "clean"
+
+
+def test_tempo_grid_selection_switches_when_rhythm_is_materially_better() -> None:
+    diagnostics = select_tempo_grid(
+        raw_detected_bpm=50.0,
+        beat_times_detected=np.arange(16, dtype=float) * 0.6,
+        duration=9.6,
+        steps_per_bar=16,
+        meter=METER_44,
+    )
+
+    assert diagnostics.selection.bpm == pytest.approx(100.0)
+    assert diagnostics.selection.tempo_source == "octave-corrected"
 
 
 def test_tempo_grid_selection_respects_manual_bpm_override() -> None:
@@ -191,6 +213,47 @@ def test_tempo_grid_selection_respects_manual_grid_start_override() -> None:
 
     assert selection.grid_start_seconds == pytest.approx(0.5)
     assert selection.grid_start_source == "manual_grid_start"
+
+
+def test_generated_tempo_candidate_matrix_invariants() -> None:
+    rng = np.random.default_rng(42)
+    meters = [METER_44, METER_34, METER_68]
+    for meter in meters:
+        for raw_bpm in [50.0, 86.0, 100.0, 172.0, 220.0]:
+            for bars in [2, 4, 8]:
+                duration = bars * meter.bar_duration(raw_bpm)
+                jitter = float(rng.normal(0.0, 0.0001))
+                beat_times = np.arange(bars * meter.primary_beats_per_bar, dtype=float) * meter.beat_duration(raw_bpm)
+                diagnostics = select_tempo_grid(
+                    raw_detected_bpm=raw_bpm,
+                    beat_times_detected=beat_times,
+                    duration=duration + jitter,
+                    steps_per_bar=meter.steps_per_bar,
+                    meter=meter,
+                )
+                valid = [candidate for candidate in diagnostics.candidates if candidate.valid]
+                assert 1 <= len(valid) <= 5
+                assert diagnostics.selection.bpm in {candidate.bpm for candidate in valid}
+                for candidate in valid:
+                    assert 45.0 <= candidate.bpm <= 240.0
+                    assert math.isfinite(candidate.total_score)
+                    assert candidate.nearest_whole_bars >= 1
+                    assert candidate.nearest_whole_beats >= 1
+
+
+def test_manual_bpm_matrix_never_replaced() -> None:
+    diagnostics = select_tempo_grid(
+        raw_detected_bpm=50.0,
+        beat_times_detected=np.arange(16, dtype=float) * 0.3,
+        duration=4.8,
+        steps_per_bar=16,
+        meter=METER_44,
+        bpm_override=123.0,
+    )
+
+    assert diagnostics.candidate_bpm_values == [123.0]
+    assert diagnostics.selection.bpm == pytest.approx(123.0)
+    assert diagnostics.selection.tempo_source == "user-supplied"
 
 
 def test_activity_maps_distinguish_low_and_high_frequency_regions() -> None:
@@ -309,6 +372,59 @@ def test_cli_parser_uses_breaksmith_name() -> None:
     help_text = parser.format_help()
     assert "breaksmith" in help_text
     assert "drum-and-bass" in help_text
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Amen Break.wav", "amen-break-wav"),
+        ("emoji 💥 break", "emoji-break"),
+        ("CON", "source"),
+        ("...", "source"),
+        ("a" * 80, "a" * 48),
+    ],
+)
+def test_run_component_sanitization(raw: str, expected: str) -> None:
+    assert sanitize_run_component(raw) == expected
+
+
+def test_allocate_run_context_creates_unique_child_directories(tmp_path: Path) -> None:
+    source = tmp_path / "Amen Break!.wav"
+    source.write_bytes(b"fake")
+    left = allocate_run_context(
+        command="generate",
+        source=source,
+        parent_dir=tmp_path / "output",
+        style="liquid",
+        suffix="abcd",
+    )
+    right = allocate_run_context(
+        command="generate",
+        source=source,
+        parent_dir=tmp_path / "output",
+        style="liquid",
+        suffix="abcd",
+    )
+
+    assert left.run_dir != right.run_dir
+    assert left.run_dir.parent == tmp_path / "output"
+    assert right.run_dir.parent == tmp_path / "output"
+    assert left.run_dir.name.startswith("amen-break-generate-liquid-")
+
+
+def test_run_manifest_uses_relative_artifact_paths(tmp_path: Path) -> None:
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"fake")
+    run = allocate_run_context(command="analyze", source=source, parent_dir=tmp_path / "output")
+    artifact = run.path("analysis.json")
+    artifact.write_text("{}\n", encoding="utf-8")
+    run.register("analysis", artifact, format="json")
+    manifest = run.write_manifest({"selected_bpm": 120.0})
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+
+    assert data["artifacts"][0]["path"] == "analysis.json"
+    assert data["artifacts"][0]["artifact_type"] == "analysis"
+    assert data["options"]["selected_bpm"] == 120.0
 
 
 @pytest.mark.parametrize("style", sorted(STYLE_PRESETS))
@@ -589,7 +705,8 @@ def test_midi_with_velocity_curve_from_cli(monkeypatch, tmp_path: Path) -> None:
         beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
-    midi_path = tmp_path / "output" / "rolling" / "pattern.mid"
+    run_dir = only_run_dir(tmp_path / "output")
+    midi_path = run_dir / "rolling" / "pattern.mid"
     assert midi_path.exists()
     midi = MidiFile(midi_path)
     note_on_count = sum(
@@ -744,8 +861,10 @@ def test_analyze_render_click_writes_diagnostic_files(monkeypatch, tmp_path: Pat
         beat_grouping=None,
     )
     assert cli._run_analyze(args) == 0
-    assert (tmp_path / "analysis-click.wav").exists()
-    assert (tmp_path / "source-with-click.wav").exists()
+    run_dir = only_run_dir(tmp_path)
+    assert (run_dir / "analysis-click.wav").exists()
+    assert (run_dir / "source-with-click.wav").exists()
+    assert (run_dir / "manifest.json").exists()
 
 
 def test_analyze_writes_feature_csv(monkeypatch, tmp_path: Path) -> None:
@@ -774,7 +893,8 @@ def test_analyze_writes_feature_csv(monkeypatch, tmp_path: Path) -> None:
         beat_grouping=None,
     )
     assert cli._run_analyze(args) == 0
-    text = features_csv.read_text(encoding="utf-8")
+    run_dir = only_run_dir(tmp_path)
+    text = (run_dir / "features.csv").read_text(encoding="utf-8")
     assert "low_mid_activity" in text
     assert "spectral_flux" in text
 
@@ -982,7 +1102,8 @@ def test_generate_with_preview_writes_wav(monkeypatch, tmp_path: Path) -> None:
         beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
-    preview = tmp_path / "output" / "rolling" / "pattern-preview.wav"
+    run_dir = only_run_dir(tmp_path / "output")
+    preview = run_dir / "rolling" / "pattern-preview.wav"
     assert preview.exists()
     data, sr = sf.read(preview, dtype="float32")
     assert sr == 44100
@@ -1028,8 +1149,58 @@ def test_generate_preview_matches_render_preview(monkeypatch, tmp_path: Path) ->
         beat_grouping=None,
     )
     assert cli._run_generate(args) == 0
-    preview_path = tmp_path / "output" / "rolling" / "pattern-preview.wav"
+    run_dir = only_run_dir(tmp_path / "output")
+    preview_path = run_dir / "rolling" / "pattern-preview.wav"
     assert preview_path.exists()
+
+
+def test_generate_repeated_runs_create_distinct_run_directories(monkeypatch, tmp_path: Path) -> None:
+    analysis = fake_analysis()
+    analysis.source = str(tmp_path / "source.wav")
+    monkeypatch.setattr(cli, "analyze_audio", lambda *args, **kwargs: analysis)
+    source = tmp_path / "source.wav"
+    sf.write(source, np.zeros(4000, dtype=np.float32), 4000)
+    args = SimpleNamespace(
+        audio=source,
+        output=tmp_path / "output",
+        bpm=172.0,
+        steps_per_bar=16,
+        style="rolling",
+        seed=42,
+        bars=2,
+        density=0.5,
+        swing=0.0,
+        humanize=0.0,
+        variation=0.25,
+        grid_start=None,
+        downbeat_start=None,
+        preview=False,
+        preview_bars=None,
+        preview_comparison=False,
+        structure=None,
+        genre=None,
+        source_restraint=None,
+        phrase_awareness=0.3,
+        groove="straight",
+        variants=1,
+        kick_density=None,
+        snare_density=None,
+        hat_density=None,
+        open_hat_density=None,
+        percussion_density=None,
+        midi_velocity_curve="linear",
+        time_signature="4/4",
+        beat_grouping=None,
+    )
+
+    assert cli._run_generate(args) == 0
+    assert cli._run_generate(args) == 0
+    run_dirs = sorted(path for path in (tmp_path / "output").iterdir() if path.is_dir())
+    assert len(run_dirs) == 2
+    assert all((run_dir / "manifest.json").exists() for run_dir in run_dirs)
+    assert all((run_dir / "rolling" / "pattern.mid").exists() for run_dir in run_dirs)
+    assert not (tmp_path / "output" / "analysis.json").exists()
+    assert not (tmp_path / "output" / "pattern.mid").exists()
 
 
 def test_arrangement_presets_have_correct_bar_totals() -> None:
@@ -1116,7 +1287,7 @@ def test_generate_with_structure_cli_flag(monkeypatch, capsys, tmp_path: Path) -
     )
     assert cli._run_generate(args) == 0
     output = capsys.readouterr().out
-    assert "intro(4b) → buildup(8b) → drop(16b) → breakdown(4b) → drop(16b) → outro(8b)" in output
+    assert "intro(4b) -> buildup(8b) -> drop(16b) -> breakdown(4b) -> drop(16b) -> outro(8b)" in output
     assert "56 total bars" in output
     assert "short arrangement" in output
 
@@ -1162,7 +1333,7 @@ def test_generate_with_structure_overrides_bars(monkeypatch, capsys, tmp_path: P
     assert cli._run_generate(args) == 0
     captured = capsys.readouterr()
     assert "Warning: --structure overrides --bars" in captured.err
-    assert "drop(16b) → outro(4b)" in captured.out
+    assert "drop(16b) -> outro(4b)" in captured.out
     assert "20 total bars" in captured.out
 
 
